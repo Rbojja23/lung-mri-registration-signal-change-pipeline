@@ -1,0 +1,12 @@
+data/
+outputs/
+*.dcm
+*.nii
+*.nii.gz
+*.npy
+*.tcia
+*.txt
+.DS_Store
+__pycache__/
+.venv/
+.ipynb_checkpoints/
