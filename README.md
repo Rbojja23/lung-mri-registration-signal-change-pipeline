@@ -220,3 +220,62 @@ python src/02b_validate_segmentation.py \
 
 The QC stage reads existing image and mask files only. It does not rerun
 TotalSegmentator and does not inspect or save patient metadata.
+
+## Bounding Box And Cropping
+
+The new bbox/crop entry point is `src/03_compute_bbox.py`. The older
+`src/03_bbox.py` is legacy lungmask-based code and is kept temporarily for
+comparison only.
+
+The bbox stage reads an existing source image and validated binary lung mask. It
+does not rerun TotalSegmentator. It computes the smallest 3D box enclosing every
+nonzero mask voxel, applies optional padding, then crops the source image,
+combined mask, and optional individual masks.
+
+Indexing conventions are explicit:
+
+- NumPy arrays use `z, y, x`.
+- SimpleITK indices use `x, y, z`.
+- Bboxes are stored as half-open intervals `[min:max)`, matching Python slicing.
+
+Padding can be requested in voxels or millimeters. Millimeter padding is
+converted to voxel padding with `ceil(padding_mm / spacing)` independently for
+each axis, so anisotropic spacing is respected. Padding is clamped at image
+boundaries.
+
+The JSON stores both voxel and physical bboxes. Physical bounds are computed with
+SimpleITK transforms and respect image origin, spacing, and direction; they do
+not assume identity direction matrices.
+
+Outputs:
+
+```text
+outputs/bbox/<case_id>/bbox.json
+outputs/crops/<case_id>/image_crop.nii.gz
+outputs/crops/<case_id>/combined_lungs_crop.nii.gz
+outputs/crops/<case_id>/<individual_mask>_crop.nii.gz
+```
+
+MRI dry-run:
+
+```bash
+python src/03_compute_bbox.py \
+  --image outputs/nifti/mri_first_case/image_from_dicom.nii.gz \
+  --mask outputs/totalsegmentator/mri_first_case/lungs/combined_lungs.nii.gz \
+  --case-id mri_first_case \
+  --padding-mm 5 \
+  --dry-run
+```
+
+MRI crop with individual masks:
+
+```bash
+python src/03_compute_bbox.py \
+  --image outputs/nifti/mri_first_case/image_from_dicom.nii.gz \
+  --mask outputs/totalsegmentator/mri_first_case/lungs/combined_lungs.nii.gz \
+  --case-id mri_first_case \
+  --padding-mm 5 \
+  --crop-individual-masks \
+  --individual-mask outputs/totalsegmentator/mri_first_case/lungs/lung_left.nii.gz \
+  --individual-mask outputs/totalsegmentator/mri_first_case/lungs/lung_right.nii.gz
+```
