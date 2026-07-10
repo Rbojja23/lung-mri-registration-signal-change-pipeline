@@ -4,7 +4,4 @@ matplotlib
 # DICOM reference validation and RTSTRUCT export.
 pydicom
 TotalSegmentator>=2.15,<2.16
-
-# Temporary legacy dependency: src/02_segment_lungs.py still imports lungmask.
-# Remove this when the legacy lungmask script is retired.
-lungmask
+PyYAML

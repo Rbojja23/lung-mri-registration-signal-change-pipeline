@@ -28,6 +28,7 @@ from segmentation_qc import (
     ct_display_limits,
     mr_display_limits,
 )
+from version import PIPELINE_VERSION
 
 
 @dataclass(frozen=True)
@@ -369,6 +370,7 @@ def build_bbox_qc_json(
     output_paths: dict[str, Path],
 ) -> dict[str, Any]:
     return {
+        "pipeline_version": PIPELINE_VERSION,
         "case_id": case_id,
         "modality": modality,
         "voxel_bbox_half_open_zyx": bbox_validation.bbox.to_dict(),

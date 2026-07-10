@@ -12,6 +12,7 @@ import SimpleITK as sitk
 
 from medical_image_io import compare_image_geometry, summarize_geometry
 from project_paths import DEFAULT_OUTPUTS_DIR, display_path
+from version import PIPELINE_VERSION
 
 
 @dataclass(frozen=True)
@@ -214,6 +215,7 @@ def build_bbox_manifest(
     image_geom = summarize_geometry(image)
     crop_geom = summarize_geometry(cropped_image)
     return {
+        "pipeline_version": PIPELINE_VERSION,
         "case_id": case_id,
         "image_path": display_path(image_path),
         "mask_path": display_path(mask_path),
@@ -383,4 +385,3 @@ def _triple_int(value: Sequence[int] | int | None, *, default: int) -> tuple[int
     if len(value) != 3:
         raise ValueError("Expected one value or three values in z,y,x order.")
     return (int(value[0]), int(value[1]), int(value[2]))
-

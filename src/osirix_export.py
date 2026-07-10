@@ -14,7 +14,7 @@ from pydicom.sequence import Sequence as DicomSequence
 from pydicom.uid import ExplicitVRLittleEndian, RTStructureSetStorage, generate_uid
 import SimpleITK as sitk
 
-from bounding_box import BBoxZYX, physical_bbox_from_voxel_bbox
+from bounding_box import BBoxZYX
 from dicom_reference import (
     DicomReferenceSeries,
     DicomSliceRef,
@@ -24,6 +24,7 @@ from dicom_reference import (
 )
 from medical_image_io import compare_image_geometry, summarize_geometry
 from project_paths import DEFAULT_OUTPUTS_DIR, display_path
+from version import PIPELINE_VERSION
 
 
 @dataclass(frozen=True)
@@ -304,6 +305,7 @@ def export_osirix_package(
             _write_fallback_package(case_dir, image_path, mask_path, bbox_json)
 
     report = {
+        "pipeline_version": PIPELINE_VERSION,
         "case_id": case_id,
         "selected_export_format": selected_format,
         "capability_classification": series.report.classification,

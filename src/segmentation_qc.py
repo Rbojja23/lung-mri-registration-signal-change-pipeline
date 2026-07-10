@@ -25,6 +25,7 @@ from medical_image_io import (
     voxel_index_xyz_to_physical_point,
 )
 from project_paths import DEFAULT_OUTPUTS_DIR, display_path
+from version import PIPELINE_VERSION
 
 
 DEFAULT_CT_WINDOW_CENTER = -500.0
@@ -520,6 +521,7 @@ def build_qc_json(
 ) -> dict[str, Any]:
     geometry = summarize_geometry(image)
     return {
+        "pipeline_version": PIPELINE_VERSION,
         "case_id": case_id,
         "modality": normalize_modality(modality, allow_auto=False),
         "image_path": display_path(image_path),

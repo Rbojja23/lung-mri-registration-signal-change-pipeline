@@ -1,3 +1,5 @@
+"""Deprecated CT-only lungmask bbox script retained for history."""
+
 from pathlib import Path
 import json
 import numpy as np

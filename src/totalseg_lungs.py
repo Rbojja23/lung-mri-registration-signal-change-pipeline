@@ -22,6 +22,7 @@ from medical_image_io import (
     summarize_geometry,
 )
 from project_paths import DEFAULT_RAW_DATA_DIR, display_path, project_root
+from version import PIPELINE_VERSION
 
 
 TOTALSEG_EXECUTABLE = "TotalSegmentator"
@@ -392,6 +393,7 @@ def build_manifest(
     status: str,
 ) -> dict[str, Any]:
     return {
+        "pipeline_version": PIPELINE_VERSION,
         "case_id": plan.case_id,
         "modality": plan.modality,
         "task": plan.task,
@@ -449,4 +451,3 @@ def _safe_process_text(text: str | None) -> str:
     if not text:
         return ""
     return text.strip()[-1000:]
-

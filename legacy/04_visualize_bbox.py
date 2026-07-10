@@ -1,3 +1,5 @@
+"""Deprecated CT-only matplotlib/lungmask bbox viewer retained for history."""
+
 from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt

@@ -1,0 +1,14 @@
+output_root: outputs
+totalsegmentator:
+  device: auto
+  fast: false
+bbox:
+  padding_mm: 5
+display:
+  ct_window_center: -500
+  ct_window_width: 1500
+  mr_lower_percentile: 1
+  mr_upper_percentile: 99
+launch:
+  enabled: false
+
