@@ -1,6 +1,7 @@
 numpy
 SimpleITK
 matplotlib
+# DICOM reference validation and RTSTRUCT export.
 pydicom
 TotalSegmentator>=2.15,<2.16
 

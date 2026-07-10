@@ -279,3 +279,94 @@ python src/03_compute_bbox.py \
   --individual-mask outputs/totalsegmentator/mri_first_case/lungs/lung_left.nii.gz \
   --individual-mask outputs/totalsegmentator/mri_first_case/lungs/lung_right.nii.gz
 ```
+
+## OsiriX Export
+
+NIfTI masks cannot simply be opened as guaranteed DICOM overlays in OsiriX
+because they do not carry references to the original DICOM SOP Instance UIDs and
+Frame of Reference. For aligned review in OsiriX, this project exports a
+referenced DICOM object when the original DICOM series has enough structural
+metadata.
+
+The selected export format is RT Structure Set. It is used because OsiriX
+workflows commonly display RTSTRUCT ROI contours and the project needs named
+review ROIs for the lung mask and computational crop box. The exporter uses
+`pydicom`, the existing DICOM dependency, to construct and validate the object.
+DICOM SEG is not implemented in this stage.
+
+Before export, run a read-only capability inspection:
+
+```bash
+python src/04_export_osirix.py inspect \
+  --dicom-dir data/raw/MRI_cases/first_case/dicom
+```
+
+The inspector reads only structural tags needed for references and geometry. It
+does not print patient identifiers or metadata dumps. Secondary Capture images
+are not rejected automatically, but RTSTRUCT export is refused unless
+FrameOfReferenceUID, UIDs, orientation, positions, spacing, dimensions, and
+slice mapping are sufficient.
+
+Dry-run export:
+
+```bash
+python src/04_export_osirix.py export \
+  --dicom-dir data/raw/MRI_cases/first_case/dicom \
+  --image outputs/nifti/mri_first_case/image_from_dicom.nii.gz \
+  --mask outputs/totalsegmentator/mri_first_case/lungs/combined_lungs.nii.gz \
+  --individual-mask "Lung Left=outputs/totalsegmentator/mri_first_case/lungs/lung_left.nii.gz" \
+  --individual-mask "Lung Right=outputs/totalsegmentator/mri_first_case/lungs/lung_right.nii.gz" \
+  --bbox-json outputs/bbox/mri_first_case/bbox.json \
+  --case-id mri_first_case \
+  --format auto \
+  --dry-run
+```
+
+If inspect and dry-run report RTSTRUCT compatibility, run the same command
+without `--dry-run`. Then manually import both the original DICOM series and
+`outputs/osirix/<case_id>/lung_segmentation_and_bbox_rtstruct.dcm` into OsiriX.
+Automatic OsiriX launching is not implemented.
+
+If a standards-compliant referenced object cannot be guaranteed, the exporter can
+create a fallback review package containing NIfTI files, QC figures if already
+available, bbox JSON, and a README. This fallback is for manual research review
+only and is not an aligned DICOM overlay.
+
+Generated DICOM-derived objects remain private medical data and must stay under
+ignored `outputs/`. This export is for research validation, not diagnosis.
+
+## Bounding-Box Validation
+
+Segmentation QC and bbox QC are separate. The segmentation figures show the lung
+mask and contours, but they do not automatically draw the computed crop box.
+Use `src/03b_visualize_bbox.py` to create a reproducible PNG overlay of the
+already-computed bbox without rerunning TotalSegmentator or changing the bbox.
+
+The bbox JSON stores half-open NumPy bounds in `z, y, x`. The visualization maps
+them into:
+
+- axial views: `y` versus `x`
+- coronal views: `z` versus `x`
+- sagittal views: `z` versus `y`
+
+The rectangle is drawn around the included voxel edges using the half-open stop
+bound, so `[min:max)` includes voxels `min` through `max - 1`. CT uses the same
+lung windowing defaults as segmentation QC. MRI uses percentile display scaling.
+
+This PNG workflow is important for the current MRI because the source DICOMs may
+be Secondary Capture objects without enough Frame of Reference metadata for a
+guaranteed aligned RTSTRUCT overlay in OsiriX.
+
+MRI bbox dry-run:
+
+```bash
+python src/03b_visualize_bbox.py \
+  --image outputs/nifti/mri_first_case/image_from_dicom.nii.gz \
+  --mask outputs/totalsegmentator/mri_first_case/lungs/combined_lungs.nii.gz \
+  --bbox-json outputs/bbox/mri_first_case/bbox.json \
+  --crop-image outputs/crops/mri_first_case/image_crop.nii.gz \
+  --crop-mask outputs/crops/mri_first_case/combined_lungs_crop.nii.gz \
+  --case-id mri_first_case \
+  --modality mr \
+  --dry-run
+```
