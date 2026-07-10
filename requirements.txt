@@ -2,3 +2,4 @@ numpy
 SimpleITK
 matplotlib
 lungmask
+pydicom

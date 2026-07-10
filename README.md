@@ -56,3 +56,50 @@ python src/check_paths.py --data-root data --output-root outputs
 
 The diagnostic only reports whether expected directories exist. It does not list
 medical files, read DICOM tags, or inspect patient metadata.
+
+## Image Loading
+
+The modality-neutral loader is `src/01_load_image.py`. It supports DICOM
+directories and NIfTI files ending in `.nii` or `.nii.gz`. The older
+`src/01_load_ct.py` script is retained temporarily as a legacy CT-only entry
+point while the replacement is validated.
+
+NIfTI inputs require an explicit modality because modality is not reliably
+encoded in the NIfTI header:
+
+```bash
+python src/01_load_image.py --input path/to/image.nii.gz --input-type nifti --modality mr --dry-run
+```
+
+DICOM inputs may use `--modality auto`, which reads only the DICOM Modality tag
+and does not inspect patient-identifying metadata:
+
+```bash
+python src/01_load_image.py --input path/to/dicom_directory --input-type dicom --modality auto --dry-run
+```
+
+The local MRI DICOM directory and `input_mri.nii` are both retained because they
+represent the same scan in different formats: DICOM preserves the original local
+source files, while NIfTI provides a direct image input for later processing.
+
+Coordinate ordering is explicit throughout the loader:
+
+- SimpleITK image indices, size, spacing, and origin use `x, y, z`.
+- NumPy arrays from `sitk.GetArrayFromImage` use `z, y, x`.
+- Physical points are reported in millimeters in the image coordinate frame.
+
+Optional safe metadata summaries and NIfTI conversion are read-only by default
+and require explicit output paths:
+
+```bash
+python src/01_load_image.py \
+  --input path/to/dicom_directory \
+  --input-type dicom \
+  --modality auto \
+  --summary-json outputs/nifti/example/summary.json \
+  --convert-to-nifti outputs/nifti/example/image.nii.gz
+```
+
+The loader refuses to write outputs under `data/raw/`, does not normalize or
+resample image intensities, and does not save patient names, patient IDs, birth
+dates, accession numbers, or study descriptions.
