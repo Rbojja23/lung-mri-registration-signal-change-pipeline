@@ -1,12 +1,48 @@
-data/
+# Private medical image data and generated artifacts
+data/raw/
 outputs/
+
+# Medical image formats and derived local arrays
 *.dcm
+*.dicom
 *.nii
 *.nii.gz
 *.npy
+
+# Generated processing outputs
+outputs/masks/
+outputs/crops/
+outputs/figures/
+outputs/totalsegmentator/
+outputs/validation/
+outputs/manifests/
+outputs/tmp/
+data/manifests/
 *.tcia
-*.txt
-.DS_Store
+tmp/
+temp/
+
+# Python cache and test cache files
 __pycache__/
-.venv/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 .ipynb_checkpoints/
+
+# Virtual environments
+.venv/
+venv/
+env/
+.env
+
+# macOS metadata
+.DS_Store
+._*
+
+# Editor and local temporary files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~

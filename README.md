@@ -30,3 +30,29 @@ The pipeline generates:
 ## Notes
 
 Raw medical image data are excluded from GitHub using `.gitignore`.
+
+## Local Data Privacy
+
+All medical imaging data must remain local. The repository ignores `data/raw/`,
+`outputs/`, DICOM files, NIfTI files, and generated NumPy arrays so private raw
+data, segmentation masks, crops, figures, and temporary processing outputs are
+not committed.
+
+Do not commit DICOM or NIfTI files. `requirements.txt` is intentionally tracked
+because it contains only the minimal Python dependencies needed by the current
+tracked CT pipeline.
+
+To check the configured local paths without inspecting patient metadata, run:
+
+```bash
+python src/check_paths.py
+```
+
+Optional overrides are supported:
+
+```bash
+python src/check_paths.py --data-root data --output-root outputs
+```
+
+The diagnostic only reports whether expected directories exist. It does not list
+medical files, read DICOM tags, or inspect patient metadata.
