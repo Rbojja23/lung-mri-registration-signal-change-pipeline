@@ -103,3 +103,72 @@ python src/01_load_image.py \
 The loader refuses to write outputs under `data/raw/`, does not normalize or
 resample image intensities, and does not save patient names, patient IDs, birth
 dates, accession numbers, or study descriptions.
+
+## Lung Segmentation With TotalSegmentator
+
+The new lung segmentation entry point is `src/02_segment_lungs_totalseg.py`.
+It supersedes the older `src/02_segment_lungs.py`, which is now a legacy
+lungmask-based script kept temporarily while the TotalSegmentator workflow is
+validated. `lungmask` remains in `requirements.txt` only for that legacy script.
+
+TotalSegmentator replaces lungmask because it supports both CT and MRI anatomy
+tasks and produces named class masks. Install dependencies from
+`requirements.txt`; the current workflow expects `TotalSegmentator>=2.15,<2.16`.
+The first real TotalSegmentator run may download model weights. Inference runs
+locally and the pipeline does not upload medical image data.
+
+Tasks are selected from modality:
+
+- CT uses TotalSegmentator task `total`.
+- MRI uses TotalSegmentator task `total_mr`.
+
+For MRI, prefer the DICOM-aligned working NIfTI:
+
+```text
+outputs/nifti/mri_first_case/image_from_dicom.nii.gz
+```
+
+This preserves geometry that can later be mapped back to the source DICOM series.
+The researcher-provided `data/raw/MRI_cases/first_case/input_mri.nii` is retained
+but is padded/reoriented relative to the original DICOM series.
+
+Outputs are written under:
+
+```text
+outputs/totalsegmentator/<case_id>/
+  raw/
+  lungs/
+  manifest.json
+```
+
+Raw TotalSegmentator class masks go in `raw/`. Curated lung masks and the binary
+whole-lung union `combined_lungs.nii.gz` go in `lungs/`. The combined mask has
+voxel values `0` and `1` and preserves the input image size, spacing, origin, and
+direction. Existing case output directories are not overwritten unless
+`--overwrite` is supplied.
+
+Device selection supports `auto`, `cpu`, `mps`, and `cuda`. `auto` uses CUDA only
+when available, otherwise Apple-silicon MPS when available, otherwise CPU. Example
+MPS dry-run:
+
+```bash
+python src/02_segment_lungs_totalseg.py \
+  --input outputs/nifti/mri_first_case/image_from_dicom.nii.gz \
+  --input-type nifti \
+  --modality mr \
+  --case-id mri_first_case \
+  --device mps \
+  --dry-run
+```
+
+CT dry-run example:
+
+```bash
+python src/02_segment_lungs_totalseg.py \
+  --input outputs/nifti/ct_first_case/image.nii.gz \
+  --input-type nifti \
+  --modality ct \
+  --case-id ct_first_case \
+  --device auto \
+  --dry-run
+```
