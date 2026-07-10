@@ -172,3 +172,51 @@ python src/02_segment_lungs_totalseg.py \
   --device auto \
   --dry-run
 ```
+
+## Segmentation Validation
+
+Validate segmentation quality before computing bounding boxes or crops. The QC
+stage checks that the source image and lung mask have identical size, spacing,
+origin, and direction; it fails rather than resampling mismatched data.
+
+Use `src/02b_validate_segmentation.py` to create reproducible matplotlib QC
+figures and a metrics JSON. Matplotlib remains the tool for saved QC contact
+sheets in this stage; OsiriX integration comes later.
+
+The QC renderer uses display-only scaling:
+
+- CT: lung-focused windowing, default center `-500`, width `1500`.
+- MRI: robust finite-voxel percentile scaling, default `1`st to `99`th
+  percentiles.
+
+It saves both filled-mask overlays and contour overlays, plus
+`segmentation_qc.json` with advisory warnings, selected slice indices, mask
+volume, connected-component metrics, centroid, boundary-touch flags, and
+coordinate conventions. These warnings are not diagnoses; they are prompts for
+manual review.
+
+MRI dry-run example:
+
+```bash
+python src/02b_validate_segmentation.py \
+  --image outputs/nifti/mri_first_case/image_from_dicom.nii.gz \
+  --mask outputs/totalsegmentator/mri_first_case/lungs/combined_lungs.nii.gz \
+  --modality mr \
+  --case-id mri_first_case \
+  --dry-run
+```
+
+MRI QC with individual masks:
+
+```bash
+python src/02b_validate_segmentation.py \
+  --image outputs/nifti/mri_first_case/image_from_dicom.nii.gz \
+  --mask outputs/totalsegmentator/mri_first_case/lungs/combined_lungs.nii.gz \
+  --individual-mask lung_left=outputs/totalsegmentator/mri_first_case/lungs/lung_left.nii.gz \
+  --individual-mask lung_right=outputs/totalsegmentator/mri_first_case/lungs/lung_right.nii.gz \
+  --modality mr \
+  --case-id mri_first_case
+```
+
+The QC stage reads existing image and mask files only. It does not rerun
+TotalSegmentator and does not inspect or save patient metadata.
