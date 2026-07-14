@@ -14,6 +14,7 @@ from bbox_qc import run_bbox_qc
 from bounding_box import compute_bbox_and_crops
 from dicom_reference import inspect_reference_series
 from medical_image_io import load_medical_image
+from itksnap_labels import prepare_itksnap_products
 from osirix_export import export_osirix_package
 from project_paths import DEFAULT_OUTPUTS_DIR, display_path
 from segmentation_qc import IndividualMask, run_segmentation_qc
@@ -93,6 +94,16 @@ def build_parser() -> argparse.ArgumentParser:
     export = sub.add_parser("export")
     _add_export_args(export)
     _add_common_runtime(export)
+
+    prepare_itksnap = sub.add_parser("prepare-itksnap")
+    prepare_itksnap.add_argument("--image", required=True)
+    prepare_itksnap.add_argument("--left-lung", required=True)
+    prepare_itksnap.add_argument("--right-lung", required=True)
+    prepare_itksnap.add_argument("--bbox-json", required=True)
+    prepare_itksnap.add_argument("--case-id", required=True)
+    prepare_itksnap.add_argument("--modality", choices=["mr", "ct"], required=True)
+    prepare_itksnap.add_argument("--output-root")
+    _add_common_runtime(prepare_itksnap)
 
     launch = sub.add_parser("launch")
     launch.add_argument("--dicom-dir")
@@ -181,6 +192,8 @@ def dispatch(args, config: dict[str, Any]) -> dict[str, Any]:
         return command_bbox_qc(args)
     if args.command == "export":
         return command_export(args, config)
+    if args.command == "prepare-itksnap":
+        return command_prepare_itksnap(args, config)
     if args.command == "launch":
         return command_launch(args)
     if args.command == "run-all":
@@ -271,6 +284,21 @@ def command_export(args, config) -> dict[str, Any]:
         case_id=args.case_id,
         output_root=output_root,
         export_format=args.format,
+        overwrite=args.overwrite,
+        dry_run=args.dry_run,
+    )
+
+
+def command_prepare_itksnap(args, config) -> dict[str, Any]:
+    output_root = args.output_root or Path(cfg(config, "output_root", "outputs")) / "itksnap"
+    return prepare_itksnap_products(
+        image_path=args.image,
+        left_lung_path=args.left_lung,
+        right_lung_path=args.right_lung,
+        bbox_json_path=args.bbox_json,
+        case_id=args.case_id,
+        modality=args.modality,
+        output_root=output_root,
         overwrite=args.overwrite,
         dry_run=args.dry_run,
     )

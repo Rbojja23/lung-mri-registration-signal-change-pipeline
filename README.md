@@ -149,8 +149,51 @@ python src/pipeline.py launch \
 
 Remove `--dry-run` to launch. Workspace mode is optional and uses
 `--workspace case.itksnap`; it cannot be combined with direct image,
-segmentation, label, or overlay arguments. ITK-SNAP-specific multilabel and bbox
-label generation will be added in the next migration checkpoint.
+segmentation, label, or overlay arguments.
+
+## ITK-SNAP Viewer Products
+
+The optional `prepare-itksnap` command creates viewer-only products under
+`outputs/itksnap/<case_id>/` without changing `run-all`:
+
+- `lungs_multilabel.nii.gz`: authoritative MRI lung labels (`0` background,
+  `1` Lung Left, `2` Lung Right).
+- `bbox_label.nii.gz`: a one-voxel-thick six-face shell using label `10`.
+- `lungs_and_bbox_labels.nii.gz`: convenient combined display using labels
+  `0/1/2/10`.
+- `label_descriptions.txt`: ITK-SNAP label names and colors.
+- `launch_manifest.json`: non-identifying paths, geometry, counts, and provenance.
+
+The bbox follows the pipeline's half-open `z,y,x` convention and marks each
+minimum face and each `max - 1` face. This keeps the shell visible throughout
+all three orthogonal views. If a shell voxel overlaps a lung, label `10` wins in
+the combined viewer image. The separate lung-only multilabel remains unchanged
+and is authoritative for segmentation analysis.
+
+All label images must exactly match the main image's size, spacing, origin, and
+direction. Validate and preview the outputs without writing anything:
+
+```bash
+python src/pipeline.py prepare-itksnap \
+  --image outputs/nifti/mri_first_case/image_from_dicom.nii.gz \
+  --left-lung outputs/totalsegmentator/mri_first_case/lungs/lung_left.nii.gz \
+  --right-lung outputs/totalsegmentator/mri_first_case/lungs/lung_right.nii.gz \
+  --bbox-json outputs/bbox/mri_first_case/bbox.json \
+  --case-id mri_first_case \
+  --modality mr \
+  --dry-run
+```
+
+Remove `--dry-run` to write the files. Once generated, preview the launch with:
+
+```bash
+python src/pipeline.py launch \
+  --viewer itksnap \
+  --image outputs/nifti/mri_first_case/image_from_dicom.nii.gz \
+  --segmentation outputs/itksnap/mri_first_case/lungs_and_bbox_labels.nii.gz \
+  --labels outputs/itksnap/mri_first_case/label_descriptions.txt \
+  --dry-run
+```
 
 ## Individual Stage Examples
 

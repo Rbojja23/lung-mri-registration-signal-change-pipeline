@@ -142,6 +142,20 @@ def compute_lung_bbox(mask_array: np.ndarray, padding: PaddingZYX | None = None)
     )
 
 
+def validate_bbox_bounds(bbox: BBoxZYX, shape_zyx: Sequence[int]) -> None:
+    """Validate a nonempty half-open bbox against a z,y,x array shape."""
+
+    if len(shape_zyx) != 3:
+        raise ValueError("Expected a 3D array shape in z,y,x order.")
+    z_size, y_size, x_size = (int(value) for value in shape_zyx)
+    if not (0 <= bbox.z_min < bbox.z_max <= z_size):
+        raise ValueError("Invalid bbox z bounds.")
+    if not (0 <= bbox.y_min < bbox.y_max <= y_size):
+        raise ValueError("Invalid bbox y bounds.")
+    if not (0 <= bbox.x_min < bbox.x_max <= x_size):
+        raise ValueError("Invalid bbox x bounds.")
+
+
 def physical_bbox_from_voxel_bbox(image: sitk.Image, bbox: BBoxZYX) -> dict[str, float]:
     """Transform half-open bbox corner coordinates to physical mm bounds.
 
