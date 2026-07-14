@@ -3,8 +3,8 @@
 Research pipeline for loading CT or MRI medical images, segmenting lungs with
 TotalSegmentator, validating the segmentation, computing a geometry-preserving
 3D lung bounding box, cropping image/mask volumes, creating QC figures, and
-exporting OsiriX-compatible review artifacts when the source DICOM series safely
-supports them.
+preparing multilabel products for interactive review in ITK-SNAP. Optional
+OsiriX/RTSTRUCT export remains available for compatible source DICOM series.
 
 This project is for research validation only. It is not a diagnostic tool.
 
@@ -37,6 +37,7 @@ outputs/totalsegmentator/<case>/  raw and derived lung masks
 outputs/figures/<case>/           segmentation and bbox QC figures
 outputs/bbox/<case>/              bbox.json
 outputs/crops/<case>/             cropped image and masks
+outputs/itksnap/<case>/           ITK-SNAP multilabel viewer products
 outputs/osirix/<case>/            RTSTRUCT or fallback review package
 outputs/logs/<case>/              non-identifying pipeline run logs
 legacy/                           deprecated CT-only lungmask scripts
@@ -75,9 +76,10 @@ The bbox stage validates a binary combined lung mask, computes a half-open 3D
 bbox, supports millimeter or voxel padding, saves `bbox.json`, and crops image
 and mask NIfTI files while updating crop origins correctly.
 
-## OsiriX Export
+## Optional OsiriX Export
 
-NIfTI masks cannot be guaranteed DICOM overlays in OsiriX because they lack
+OsiriX is no longer part of the default `run-all` path. NIfTI masks cannot be
+guaranteed DICOM overlays in OsiriX because they lack
 source SOP Instance UID and Frame of Reference references. The export stage first
 validates the original DICOM series using non-identifying structural tags.
 
@@ -89,7 +91,9 @@ When safe, it writes an RT Structure Set containing:
 
 Secondary Capture images are not rejected automatically, but RTSTRUCT export is
 refused if FrameOfReferenceUID, geometry, or one-to-one slice mapping is missing.
-If RTSTRUCT is unsafe, a fallback review package is created instead.
+If RTSTRUCT is unsafe, a fallback review package is created instead. This does
+not block ITK-SNAP review because that path uses geometry-matched NIfTI files and
+does not require DICOM Frame of Reference metadata.
 
 ## Unified CLI
 
@@ -107,11 +111,15 @@ python src/pipeline.py run-all \
   --input-type nifti \
   --modality mr \
   --case-id mri_first_case \
-  --dicom-dir data/raw/MRI_cases/first_case/dicom \
   --device mps \
   --padding-mm 5 \
   --no-launch
 ```
+
+This produces the ITK-SNAP viewer package automatically but does not open the
+application. To launch ITK-SNAP after preparation, replace `--no-launch` with
+`--launch --viewer itksnap`. Automatic launch is disabled in the default
+configuration.
 
 Resume:
 
@@ -121,9 +129,21 @@ python src/pipeline.py run-all \
   --input-type nifti \
   --modality mr \
   --case-id mri_first_case \
-  --dicom-dir data/raw/MRI_cases/first_case/dicom \
   --resume \
   --no-launch
+```
+
+Resume and launch:
+
+```bash
+python src/pipeline.py run-all \
+  --image outputs/nifti/mri_first_case/image_from_dicom.nii.gz \
+  --input-type nifti \
+  --modality mr \
+  --case-id mri_first_case \
+  --resume \
+  --launch \
+  --viewer itksnap
 ```
 
 Configuration defaults live in `config/default.yaml`; command-line arguments
@@ -153,8 +173,9 @@ segmentation, label, or overlay arguments.
 
 ## ITK-SNAP Viewer Products
 
-The optional `prepare-itksnap` command creates viewer-only products under
-`outputs/itksnap/<case_id>/` without changing `run-all`:
+The `prepare-itksnap` stage runs automatically near the end of `run-all` and can
+also be invoked directly. It creates viewer products under
+`outputs/itksnap/<case_id>/`:
 
 - `lungs_multilabel.nii.gz`: authoritative MRI lung labels (`0` background,
   `1` Lung Left, `2` Lung Right).
@@ -195,6 +216,12 @@ python src/pipeline.py launch \
   --dry-run
 ```
 
+`run-all --dry-run` plans every processing stage, the five viewer products, and
+the viewer argument roles without writing files, running TotalSegmentator, or
+opening an external application. MRI is fully supported; CT viewer-label
+preparation currently fails explicitly because the five-lobe mapping has not yet
+been configured in this stage.
+
 ## Individual Stage Examples
 
 Segmentation QC:
@@ -222,7 +249,17 @@ python src/pipeline.py bbox-qc \
   --case-id mri_first_case
 ```
 
-Manual viewer launch:
+Optional manual RTSTRUCT export and OsiriX launch:
+
+```bash
+python src/pipeline.py export \
+  --dicom-dir data/raw/MRI_cases/first_case/dicom \
+  --image outputs/nifti/mri_first_case/image_from_dicom.nii.gz \
+  --mask outputs/totalsegmentator/mri_first_case/lungs/combined_lungs.nii.gz \
+  --bbox-json outputs/bbox/mri_first_case/bbox.json \
+  --case-id mri_first_case \
+  --format rtstruct
+```
 
 ```bash
 python src/pipeline.py launch \

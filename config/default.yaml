@@ -11,4 +11,4 @@ display:
   mr_upper_percentile: 99
 launch:
   enabled: false
-
+  viewer: itksnap

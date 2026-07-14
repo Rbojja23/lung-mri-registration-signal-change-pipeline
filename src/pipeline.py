@@ -8,12 +8,13 @@ from pathlib import Path
 import time
 from typing import Any, Callable
 
+import SimpleITK as sitk
 import yaml
 
 from bbox_qc import run_bbox_qc
 from bounding_box import compute_bbox_and_crops
 from dicom_reference import inspect_reference_series
-from medical_image_io import load_medical_image
+from medical_image_io import load_medical_image, summarize_geometry
 from itksnap_labels import prepare_itksnap_products
 from osirix_export import export_osirix_package
 from project_paths import DEFAULT_OUTPUTS_DIR, display_path
@@ -29,7 +30,15 @@ from viewer_launcher import (
 )
 
 
-STAGE_NAMES = ["inspect", "segment", "segmentation-qc", "bbox", "bbox-qc", "export", "launch"]
+STAGE_NAMES = [
+    "inspect",
+    "segment",
+    "segmentation-qc",
+    "bbox",
+    "bbox-qc",
+    "prepare-itksnap",
+    "launch",
+]
 
 
 def load_config(path: str | Path | None) -> dict[str, Any]:
@@ -110,7 +119,11 @@ def build_parser() -> argparse.ArgumentParser:
     launch.add_argument("--rtstruct")
     launch.add_argument("--fallback-dir")
     launch.add_argument("--nifti", action="append", default=[])
-    launch.add_argument("--viewer", default="itksnap")
+    launch.add_argument(
+        "--viewer",
+        choices=["itksnap", "osirix", "osirix-lite", "osirix-md", "horos"],
+        default="itksnap",
+    )
     launch.add_argument("--image")
     launch.add_argument("--segmentation", action="append", default=[])
     launch.add_argument("--labels")
@@ -119,7 +132,14 @@ def build_parser() -> argparse.ArgumentParser:
     launch.add_argument("--health-check", action="store_true")
     launch.add_argument("--dry-run", action="store_true")
 
-    run_all = sub.add_parser("run-all")
+    run_all = sub.add_parser(
+        "run-all",
+        description=(
+            "Run the processing pipeline and automatically prepare ITK-SNAP viewer products. "
+            "Launching is optional; a geometry-preserving NIfTI is sufficient for ITK-SNAP. "
+            "OsiriX/RTSTRUCT export is performed only with --export-rtstruct."
+        ),
+    )
     _add_image_case(run_all)
     run_all.add_argument("--input-type", choices=["auto", "dicom", "nifti"], default="nifti")
     run_all.add_argument("--dicom-dir")
@@ -127,9 +147,20 @@ def build_parser() -> argparse.ArgumentParser:
     run_all.add_argument("--device")
     run_all.add_argument("--fast", action="store_true", default=None)
     run_all.add_argument("--padding-mm", type=float, nargs="+")
-    run_all.add_argument("--resume", action="store_true")
-    run_all.add_argument("--no-launch", action="store_true")
-    run_all.add_argument("--viewer")
+    run_all.add_argument("--resume", action="store_true", help="Reuse complete validated stage outputs.")
+    launch_group = run_all.add_mutually_exclusive_group()
+    launch_group.add_argument("--launch", action="store_true", help="Launch the selected viewer after preparation.")
+    launch_group.add_argument("--no-launch", action="store_true", help="Prepare viewer products without opening an application.")
+    run_all.add_argument(
+        "--viewer",
+        choices=["itksnap", "osirix", "osirix-lite", "osirix-md", "horos"],
+        help="Interactive viewer (default from config: itksnap). OsiriX/Horos are optional legacy paths.",
+    )
+    run_all.add_argument(
+        "--export-rtstruct",
+        action="store_true",
+        help="Opt in to the optional OsiriX RTSTRUCT/fallback export; requires --dicom-dir.",
+    )
     _add_common_runtime(run_all)
     return parser
 
@@ -340,40 +371,78 @@ def run_all(args, config: dict[str, Any], stage_functions: dict[str, Callable] |
     funcs = stage_functions or _default_stage_functions()
     output_root = Path(args.output_root or cfg(config, "output_root", "outputs"))
     paths = _run_all_paths(output_root, args.case_id, args.modality)
+    viewer = getattr(args, "viewer", None) or cfg(config, "launch.viewer", "itksnap")
+    launch_requested = (
+        False
+        if getattr(args, "no_launch", False)
+        else True
+        if getattr(args, "launch", False)
+        else bool(cfg(config, "launch.enabled", False))
+    )
+    export_requested = bool(getattr(args, "export_rtstruct", False))
+    if export_requested and not args.dicom_dir:
+        raise ValueError("--export-rtstruct requires --dicom-dir.")
+    if args.modality != "mr":
+        raise ValueError("ITK-SNAP CT label preparation not yet configured; run-all viewer products currently require MR.")
     completed: list[str] = []
     timings: dict[str, float] = {}
     warnings: list[str] = []
     start_total = time.perf_counter()
+    stage_total = 7 + int(export_requested)
 
     def run_stage(index: int, name: str, exists_path: Path | list[Path] | None, call: Callable[[], Any]):
-        print(f"[{index}/7] {name}")
+        print(f"[{index}/{stage_total}] {name}")
         stage_start = time.perf_counter()
-        if args.resume and _complete(exists_path):
+        reusable = args.resume and _complete(exists_path)
+        if name == "prepare-itksnap" and reusable:
+            reusable = _valid_itksnap_package(paths, args.image)
+        if reusable:
             completed.append(name)
             timings[name] = 0.0
-            print(f"[{index}/7] {name}: reused")
+            print(f"[{index}/{stage_total}] {name}: reused")
             return {"status": "reused"}
         result = call()
         completed.append(name)
         timings[name] = time.perf_counter() - stage_start
-        print(f"[{index}/7] {name}: ok ({timings[name]:.1f}s)")
+        print(f"[{index}/{stage_total}] {name}: ok ({timings[name]:.1f}s)")
         return result
 
-    results: dict[str, Any] = {"pipeline_version": PIPELINE_VERSION, "case_id": args.case_id}
+    results: dict[str, Any] = {
+        "pipeline_version": PIPELINE_VERSION,
+        "case_id": args.case_id,
+        "viewer": viewer,
+    }
+    launch_status = "disabled"
     try:
-        results["inspect"] = run_stage(1, "inspect", None, lambda: funcs["inspect"](args))
+        inspect_args = _namespace_from(
+            args, dicom_dir=args.dicom_dir if export_requested else None
+        )
+        results["inspect"] = run_stage(
+            1, "inspect", None, lambda: funcs["inspect"](inspect_args)
+        )
         results["segment"] = run_stage(
             2,
             "segment",
-            [paths["segment_manifest"], paths["combined_mask"]],
-            lambda: funcs["segment"](args, config),
+            [paths["segment_manifest"], paths["combined_mask"], *paths["individual_masks"]],
+            lambda: (
+                _planned_stage(
+                    "segment",
+                    [paths["segment_manifest"], paths["combined_mask"], *paths["individual_masks"]],
+                )
+                if args.dry_run and stage_functions is None
+                else funcs["segment"](args, config)
+            ),
         )
         seg_qc_args = _namespace_from(args, mask=str(paths["combined_mask"]), output_dir=str(paths["figures_dir"]))
         results["segmentation-qc"] = run_stage(
             3,
             "segmentation-qc",
             paths["seg_qc_json"],
-            lambda: funcs["segmentation-qc"](seg_qc_args),
+            lambda: (
+                _planned_stage("segmentation-qc", [paths["seg_qc_json"]])
+                if args.dry_run and stage_functions is None
+                else funcs["segmentation-qc"](seg_qc_args)
+            ),
         )
         bbox_args = _namespace_from(
             args,
@@ -382,13 +451,17 @@ def run_all(args, config: dict[str, Any], stage_functions: dict[str, Callable] |
             padding_mm=args.padding_mm if args.padding_mm is not None else cfg(config, "bbox.padding_mm", 0),
             padding_voxels=None,
             crop_individual_masks=True,
-            individual_mask=[str(p) for p in paths["individual_masks"] if p.exists()],
+            individual_mask=[str(p) for p in paths["individual_masks"]],
         )
         results["bbox"] = run_stage(
             4,
             "bbox",
             [paths["bbox_json"], paths["image_crop"], paths["combined_crop"]],
-            lambda: funcs["bbox"](bbox_args, config),
+            lambda: (
+                _planned_stage("bbox", [paths["bbox_json"], paths["image_crop"], paths["combined_crop"]])
+                if args.dry_run and stage_functions is None
+                else funcs["bbox"](bbox_args, config)
+            ),
         )
         bbox_qc_args = _namespace_from(
             args,
@@ -398,8 +471,41 @@ def run_all(args, config: dict[str, Any], stage_functions: dict[str, Callable] |
             crop_mask=str(paths["combined_crop"]),
             output_dir=str(paths["figures_dir"]),
         )
-        results["bbox-qc"] = run_stage(5, "bbox-qc", paths["bbox_qc_json"], lambda: funcs["bbox-qc"](bbox_qc_args))
-        if args.dicom_dir:
+        results["bbox-qc"] = run_stage(
+            5,
+            "bbox-qc",
+            paths["bbox_qc_json"],
+            lambda: (
+                _planned_stage("bbox-qc", [paths["bbox_qc_json"]])
+                if args.dry_run and stage_functions is None
+                else funcs["bbox-qc"](bbox_qc_args)
+            ),
+        )
+        prepare_args = _namespace_from(
+            args,
+            left_lung=str(paths["individual_masks"][0]),
+            right_lung=str(paths["individual_masks"][1]),
+            bbox_json=str(paths["bbox_json"]),
+            output_root=str(output_root / "itksnap"),
+            overwrite=(
+                args.overwrite
+                or (args.resume and not _valid_itksnap_package(paths, args.image))
+            ),
+        )
+        results["prepare-itksnap"] = run_stage(
+            6,
+            "prepare-itksnap",
+            paths["itksnap_required"],
+            lambda: (
+                _planned_itksnap_products(paths)
+                if args.dry_run and stage_functions is None
+                else funcs["prepare-itksnap"](prepare_args, config)
+            ),
+        )
+        warnings.extend(results["prepare-itksnap"].get("warnings", []))
+
+        next_index = 7
+        if export_requested:
             export_args = _namespace_from(
                 args,
                 dicom_dir=args.dicom_dir,
@@ -407,27 +513,77 @@ def run_all(args, config: dict[str, Any], stage_functions: dict[str, Callable] |
                 bbox_json=str(paths["bbox_json"]),
                 output_root=str(output_root / "osirix"),
                 format="auto",
-                individual_mask=[f"{p.stem}={p}" for p in paths["individual_masks"] if p.exists()],
+                individual_mask=[f"{p.stem}={p}" for p in paths["individual_masks"]],
             )
-            results["export"] = run_stage(6, "export", paths["export_report"], lambda: funcs["export"](export_args, config))
-        if not args.no_launch and not args.dry_run and cfg(config, "launch.enabled", False):
-            launch_args = _namespace_from(
-                args,
-                rtstruct=str(paths["rtstruct"]) if paths["rtstruct"].exists() else None,
-                fallback_dir=str(paths["fallback_dir"]) if paths["fallback_dir"].exists() else None,
-                nifti=[args.image, str(paths["combined_mask"])],
+            results["export"] = run_stage(
+                next_index,
+                "export",
+                paths["export_report"],
+                lambda: (
+                    _planned_stage("export", [paths["export_report"]])
+                    if args.dry_run and stage_functions is None
+                    else funcs["export"](export_args, config)
+                ),
             )
-            results["launch"] = run_stage(7, "launch", None, lambda: funcs["launch"](launch_args))
+            next_index += 1
+
+        launch_args = _namespace_from(
+            args,
+            viewer=viewer,
+            image=args.image,
+            segmentation=[str(paths["itksnap_combined"])],
+            labels=str(paths["itksnap_labels"]),
+            overlay=[],
+            workspace=None,
+            health_check=False,
+            rtstruct=str(paths["rtstruct"]) if export_requested else None,
+            fallback_dir=str(paths["fallback_dir"]) if export_requested else None,
+            nifti=[],
+        )
+        if args.dry_run:
+            results["launch"] = run_stage(
+                next_index,
+                "launch",
+                None,
+                lambda: (
+                    _planned_launch(paths, args.image, viewer, launch_requested)
+                    if stage_functions is None
+                    else funcs["launch"](launch_args)
+                ),
+            )
+            launch_status = "dry-run"
+        elif launch_requested:
+            results["launch"] = run_stage(
+                next_index, "launch", None, lambda: funcs["launch"](launch_args)
+            )
+            launch_status = results["launch"].get("status", "launched")
+            warnings.extend(results["launch"].get("warnings", []))
+        else:
+            results["launch"] = {"status": "disabled", "viewer": viewer}
     except Exception as exc:
-        log = _write_run_log(output_root, args.case_id, args.modality, completed, timings, warnings, "failed", str(exc))
+        launch_status = "failed" if "launch" in completed or launch_requested else launch_status
+        if args.dry_run:
+            raise RuntimeError(f"run-all dry-run failed: {exc}") from exc
+        log = _write_run_log(
+            output_root, args.case_id, args.modality, completed, timings, warnings,
+            "failed", str(exc), viewer, paths["itksnap_required"], launch_status,
+        )
         raise RuntimeError(f"run-all failed: {exc}. Log: {display_path(log)}") from exc
 
     total_runtime = time.perf_counter() - start_total
-    log = _write_run_log(output_root, args.case_id, args.modality, completed, timings, warnings, "success", None)
     results["completed_stages"] = completed
     results["stage_timings_seconds"] = timings
     results["total_runtime_seconds"] = total_runtime
-    results["run_log"] = display_path(log)
+    results["viewer_products"] = [display_path(path) for path in paths["itksnap_required"]]
+    results["launch_status"] = launch_status
+    if args.dry_run:
+        results["run_log"] = {"status": "not-written-during-dry-run"}
+    else:
+        log = _write_run_log(
+            output_root, args.case_id, args.modality, completed, timings, warnings,
+            "success", None, viewer, paths["itksnap_required"], launch_status,
+        )
+        results["run_log"] = display_path(log)
     return results
 
 
@@ -439,6 +595,80 @@ def _complete(path_or_paths: Path | list[Path] | None) -> bool:
     return path_or_paths.exists()
 
 
+def _valid_itksnap_package(paths: dict[str, Any], image_path: str | Path) -> bool:
+    if not _complete(paths["itksnap_required"]):
+        return False
+    try:
+        manifest = json.loads(paths["itksnap_manifest"].read_text())
+        if manifest.get("completion_status") != "complete":
+            return False
+        if manifest.get("image_path") != display_path(image_path):
+            return False
+        geometry = manifest.get("image_geometry", {})
+        current = summarize_geometry(sitk.ReadImage(str(image_path)))
+        return (
+            tuple(geometry.get("size_xyz", ())) == current.size_xyz
+            and tuple(geometry.get("spacing_xyz", ())) == current.spacing_xyz
+            and tuple(geometry.get("origin_xyz", ())) == current.origin_xyz
+            and tuple(geometry.get("direction", ())) == current.direction
+        )
+    except (OSError, ValueError, TypeError, json.JSONDecodeError, RuntimeError):
+        return False
+
+
+def _planned_stage(name: str, outputs: list[Path]) -> dict[str, Any]:
+    return {
+        "status": "dry-run",
+        "stage": name,
+        "planned_outputs": [display_path(path) for path in outputs],
+    }
+
+
+def _planned_itksnap_products(paths: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "completion_status": "dry-run",
+        "stage": "prepare-itksnap",
+        "planned_outputs": [display_path(path) for path in paths["itksnap_required"]],
+        "label_mapping": {
+            "0": "Clear Label",
+            "1": "Lung Left",
+            "2": "Lung Right",
+            "10": "Lung Bounding Box",
+        },
+    }
+
+
+def _planned_launch(
+    paths: dict[str, Any], image_path: str | Path, viewer: str, requested: bool
+) -> dict[str, Any]:
+    if viewer == "itksnap":
+        roles = {
+            "main_image": display_path(image_path),
+            "segmentation": display_path(paths["itksnap_combined"]),
+            "label_descriptions": display_path(paths["itksnap_labels"]),
+        }
+        command = [
+            "ITK-SNAP",
+            "-g",
+            roles["main_image"],
+            "-s",
+            roles["segmentation"],
+            "-l",
+            roles["label_descriptions"],
+        ]
+    else:
+        roles = {"dicom_directory": "optional OsiriX/Horos input"}
+        command = ["open", "-a", viewer]
+    return {
+        "status": "dry-run",
+        "viewer": viewer,
+        "launch_requested": requested,
+        "argument_roles": roles,
+        "planned_command": command,
+        "external_application_executed": False,
+    }
+
+
 def _default_stage_functions() -> dict[str, Callable]:
     return {
         "inspect": lambda args: command_inspect(_namespace_from(args, input=args.image, dicom_dir=args.dicom_dir)),
@@ -446,6 +676,7 @@ def _default_stage_functions() -> dict[str, Callable]:
         "segmentation-qc": command_segmentation_qc,
         "bbox": command_bbox,
         "bbox-qc": command_bbox_qc,
+        "prepare-itksnap": command_prepare_itksnap,
         "export": command_export,
         "launch": command_launch,
     }
@@ -471,13 +702,38 @@ def _run_all_paths(output_root: Path, case_id: str, modality: str) -> dict[str, 
         "image_crop": output_root / "crops" / case_id / "image_crop.nii.gz",
         "combined_crop": output_root / "crops" / case_id / "combined_lungs_crop.nii.gz",
         "bbox_qc_json": output_root / "figures" / case_id / "bounding_box_qc.json",
+        "itksnap_dir": output_root / "itksnap" / case_id,
+        "itksnap_lungs": output_root / "itksnap" / case_id / "lungs_multilabel.nii.gz",
+        "itksnap_bbox": output_root / "itksnap" / case_id / "bbox_label.nii.gz",
+        "itksnap_combined": output_root / "itksnap" / case_id / "lungs_and_bbox_labels.nii.gz",
+        "itksnap_labels": output_root / "itksnap" / case_id / "label_descriptions.txt",
+        "itksnap_manifest": output_root / "itksnap" / case_id / "launch_manifest.json",
+        "itksnap_required": [
+            output_root / "itksnap" / case_id / "lungs_multilabel.nii.gz",
+            output_root / "itksnap" / case_id / "bbox_label.nii.gz",
+            output_root / "itksnap" / case_id / "lungs_and_bbox_labels.nii.gz",
+            output_root / "itksnap" / case_id / "label_descriptions.txt",
+            output_root / "itksnap" / case_id / "launch_manifest.json",
+        ],
         "export_report": output_root / "osirix" / case_id / "export_report.json",
         "rtstruct": output_root / "osirix" / case_id / "lung_segmentation_and_bbox_rtstruct.dcm",
         "fallback_dir": output_root / "osirix" / case_id / "review_package",
     }
 
 
-def _write_run_log(output_root: Path, case_id: str, modality: str, completed, timings, warnings, status, error):
+def _write_run_log(
+    output_root: Path,
+    case_id: str,
+    modality: str,
+    completed,
+    timings,
+    warnings,
+    status,
+    error,
+    viewer,
+    viewer_products,
+    launch_status,
+):
     log_dir = output_root / "logs" / case_id
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / "pipeline_run.json"
@@ -496,6 +752,9 @@ def _write_run_log(output_root: Path, case_id: str, modality: str, completed, ti
         "software_versions": versions,
         "warnings": warnings,
         "errors": [error] if error else [],
+        "viewer": viewer,
+        "viewer_product_paths": [display_path(path) for path in viewer_products],
+        "launch_status": launch_status,
         "completion_status": status,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }, indent=2) + "\n")
