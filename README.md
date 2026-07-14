@@ -129,6 +129,29 @@ python src/pipeline.py run-all \
 Configuration defaults live in `config/default.yaml`; command-line arguments
 override configuration values.
 
+## ITK-SNAP Launcher
+
+On macOS, the launcher checks `/Applications/ITK-SNAP.app` first and then
+`~/Applications/ITK-SNAP.app`. It reads the bundle metadata to locate the real
+executable; `itksnap-wt` is not required.
+
+Direct mode uses `-g` for one main image and `-s` for one or more segmentation
+NIfTI files. Optional label descriptions use `-l`, and additional image overlays
+use `-o`. Preview a launch without starting ITK-SNAP:
+
+```bash
+python src/pipeline.py launch \
+  --viewer itksnap \
+  --image outputs/nifti/mri_first_case/image_from_dicom.nii.gz \
+  --segmentation outputs/totalsegmentator/mri_first_case/lungs/combined_lungs.nii.gz \
+  --dry-run
+```
+
+Remove `--dry-run` to launch. Workspace mode is optional and uses
+`--workspace case.itksnap`; it cannot be combined with direct image,
+segmentation, label, or overlay arguments. ITK-SNAP-specific multilabel and bbox
+label generation will be added in the next migration checkpoint.
+
 ## Individual Stage Examples
 
 Segmentation QC:

@@ -19,7 +19,13 @@ from project_paths import DEFAULT_OUTPUTS_DIR, display_path
 from segmentation_qc import IndividualMask, run_segmentation_qc
 from totalseg_lungs import run_lung_segmentation
 from version import PIPELINE_VERSION
-from viewer_launcher import build_launch_plan, launch_plan
+from viewer_launcher import (
+    build_itksnap_launch_plan,
+    build_launch_plan,
+    check_itksnap_health,
+    detect_itksnap,
+    launch_plan,
+)
 
 
 STAGE_NAMES = ["inspect", "segment", "segmentation-qc", "bbox", "bbox-qc", "export", "launch"]
@@ -93,7 +99,13 @@ def build_parser() -> argparse.ArgumentParser:
     launch.add_argument("--rtstruct")
     launch.add_argument("--fallback-dir")
     launch.add_argument("--nifti", action="append", default=[])
-    launch.add_argument("--viewer")
+    launch.add_argument("--viewer", default="itksnap")
+    launch.add_argument("--image")
+    launch.add_argument("--segmentation", action="append", default=[])
+    launch.add_argument("--labels")
+    launch.add_argument("--overlay", action="append", default=[])
+    launch.add_argument("--workspace")
+    launch.add_argument("--health-check", action="store_true")
     launch.add_argument("--dry-run", action="store_true")
 
     run_all = sub.add_parser("run-all")
@@ -265,6 +277,27 @@ def command_export(args, config) -> dict[str, Any]:
 
 
 def command_launch(args) -> dict[str, Any]:
+    if args.viewer == "itksnap":
+        installation = detect_itksnap()
+        if getattr(args, "health_check", False):
+            checked = check_itksnap_health(installation)
+            return {
+                "viewer": "itksnap",
+                "status": checked.status,
+                "bundle": display_path(checked.bundle_path) if checked.bundle_path else None,
+                "executable": display_path(checked.executable_path) if checked.executable_path else None,
+                "version": checked.short_version,
+                "message": checked.message,
+            }
+        plan = build_itksnap_launch_plan(
+            image_path=getattr(args, "image", None),
+            segmentation_paths=getattr(args, "segmentation", ()),
+            label_description_path=getattr(args, "labels", None),
+            overlay_paths=getattr(args, "overlay", ()),
+            workspace_path=getattr(args, "workspace", None),
+            installation=installation,
+        )
+        return launch_plan(plan, dry_run=args.dry_run)
     plan = build_launch_plan(
         dicom_dir=args.dicom_dir,
         rtstruct_path=args.rtstruct,
