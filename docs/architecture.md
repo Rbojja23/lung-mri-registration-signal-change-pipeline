@@ -1,47 +1,91 @@
 # Architecture
 
-## Data Flow
+## Primary and optional branches
 
 ```mermaid
 flowchart TD
-  A[DICOM or NIfTI input] --> B[Geometry-preserving NIfTI loading]
-  B --> C[TotalSegmentator lung segmentation]
+  A[DICOM or NIfTI input] --> B[Geometry-preserving image loading]
+  B --> C[TotalSegmentator]
   C --> D[Segmentation QC]
-  D --> E[Bounding box and crop]
+  D --> E[Half-open bbox and crops]
   E --> F[Bounding-box QC]
-  F --> G[ITK-SNAP multilabel viewer products]
-  G --> H[Optional ITK-SNAP launch]
-  B -. explicit opt-in with original DICOM .-> I{DICOM reference compatible?}
-  I -->|yes| J[RTSTRUCT export]
-  I -->|no| K[Fallback review package]
-  J --> L[Optional OsiriX/Horos launch]
-  K --> L
+  F --> G[ITK-SNAP multilabel products]
+  G --> H{Launch enabled?}
+  H -->|yes| I[ITK-SNAP launch]
+  H -->|no| J[Viewer package ready]
+  B -. explicit opt-in with original DICOM .-> K[DICOM capability validation]
+  K --> L{Spatial references complete?}
+  L -->|yes| M[RTSTRUCT export]
+  L -->|no| N[Refuse RTSTRUCT or create explicit fallback]
+  M --> O[Optional OsiriX or Horos launch]
 ```
 
-## Coordinate Conventions
+The solid branch is the supported v1.1 interactive workflow. The dotted DICOM
+branch is optional and never runs silently during `run-all`.
 
-- SimpleITK indices and image size use `x, y, z`.
-- NumPy arrays from SimpleITK use `z, y, x`.
-- Physical coordinates are millimeters in the image coordinate frame.
-- Bounding boxes are stored as half-open intervals `[min:max)` in NumPy
-  `z, y, x` order.
+## Coordinate conventions
 
-## Geometry Preservation
+- SimpleITK indices, sizes, spacing, and origins use `x,y,z`.
+- Arrays returned by SimpleITK use NumPy `z,y,x` order.
+- Physical points are millimeters in the image coordinate frame.
+- Direction matrices are preserved; identity direction is never assumed.
+- Bboxes use half-open NumPy intervals `[min:max)`.
+- Crops use SimpleITK regions, retaining spacing/direction and updating origin.
 
-Images, masks, crops, and overlays are validated with size, spacing, origin, and
-direction checks. Crops use SimpleITK region-of-interest operations so the crop
-origin is updated to the physical location of the crop start index.
+## Semantic labels
 
-## Viewer Products
+MRI viewer mapping:
 
-The primary interactive-review branch creates geometry-matched integer NIfTI
-labels for semantic lungs, a six-face half-open bbox shell, and a combined
-viewer segmentation. ITK-SNAP launch is optional and uses the full image, the
-combined segmentation, and its label-description file.
+| Value | Meaning |
+|---:|---|
+| 0 | Clear Label / background |
+| 1 | Lung Left |
+| 2 | Lung Right |
+| 10 | Lung Bounding Box |
 
-## Optional DICOM Export
+Anatomical sides come from TotalSegmentator semantic filenames, never coordinate
+sign or screen position. CT's five lobe masks are processed by the segmentation
+stage, but their ITK-SNAP label mapping is not configured in v1.1.
 
-The explicit OsiriX export command validates structural DICOM references before writing a
-referenced RT Structure Set. It refuses to fabricate missing Frame of Reference
-or slice-reference metadata. If a referenced object cannot be guaranteed, it
-creates a fallback review package instead.
+## Six-face bbox shell
+
+For `[z0:z1, y0:y1, x0:x1)`, the authoritative bbox label marks faces at `z0`,
+`z1-1`, `y0`, `y1-1`, `x0`, and `x1-1`, filling across the other dimensions.
+This remains valid at image boundaries and for one-voxel dimensions. In the
+combined viewer image, bbox label 10 has display priority over lung labels. The
+separate lung and bbox products remain authoritative.
+
+## Geometry validation
+
+All full-volume masks and viewer labels must match reference size, spacing,
+origin, and direction. Binary anatomical masks must be nonempty and disjoint.
+Viewer images use an unsigned integer label type and copy reference metadata.
+
+## Resume logic
+
+Earlier stages reuse their required outputs only when complete. ITK-SNAP reuse
+requires all five package files plus a manifest with:
+
+- completion status `complete`;
+- matching safe source-image path;
+- matching size, spacing, origin, and direction;
+- the v1.1 label mapping;
+- a half-open `z,y,x`, `max-1` bbox convention.
+
+Partial, malformed, stale, or semantically incompatible packages are regenerated
+only within the selected case's ITK-SNAP output directory.
+
+## Privacy boundaries
+
+Private inputs live under ignored `data/raw/`; all generated artifacts live under
+ignored `outputs/`. Safe summaries omit identifying DICOM tags and use
+project-relative paths when possible. The optional DICOM validator reads only
+the structural metadata required for capability classification. Pipeline logs do
+not store environment variables or full subprocess output.
+
+## Optional RTSTRUCT branch
+
+RTSTRUCT export requires consistent Study/Series identifiers, unique SOP
+Instance UIDs, dimensions, pixel spacing, orientation, positions, one-to-one
+slice mapping, and `FrameOfReferenceUID`. Missing reference metadata does not
+affect NIfTI processing or ITK-SNAP visualization.

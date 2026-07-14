@@ -15,7 +15,7 @@ from bbox_qc import run_bbox_qc
 from bounding_box import compute_bbox_and_crops
 from dicom_reference import inspect_reference_series
 from medical_image_io import load_medical_image, summarize_geometry
-from itksnap_labels import prepare_itksnap_products
+from itksnap_labels import LABEL_MAPPING, prepare_itksnap_products
 from osirix_export import export_osirix_package
 from project_paths import DEFAULT_OUTPUTS_DIR, display_path
 from segmentation_qc import IndividualMask, run_segmentation_qc
@@ -59,18 +59,20 @@ def cfg(config: dict[str, Any], dotted: str, default: Any = None) -> Any:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="CT/MRI lung bbox pipeline v1.0")
+    parser = argparse.ArgumentParser(
+        description=f"CT/MRI lung bbox pipeline v{PIPELINE_VERSION}"
+    )
     parser.add_argument("--version", action="version", version=PIPELINE_VERSION)
     parser.add_argument("--config", default="config/default.yaml")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    inspect_p = sub.add_parser("inspect")
+    inspect_p = sub.add_parser("inspect", help="Inspect image geometry or optional DICOM capability.")
     inspect_p.add_argument("--input")
     inspect_p.add_argument("--input-type", choices=["auto", "dicom", "nifti"], default="auto")
     inspect_p.add_argument("--modality", choices=["auto", "ct", "mr"], default="auto")
     inspect_p.add_argument("--dicom-dir")
 
-    segment = sub.add_parser("segment")
+    segment = sub.add_parser("segment", help="Run modality-specific TotalSegmentator lung segmentation.")
     _add_image_case(segment)
     segment.add_argument("--input-type", choices=["auto", "dicom", "nifti"], default="auto")
     segment.add_argument("--output-root")
@@ -78,12 +80,12 @@ def build_parser() -> argparse.ArgumentParser:
     segment.add_argument("--fast", action="store_true", default=None)
     _add_common_runtime(segment)
 
-    seg_qc = sub.add_parser("segmentation-qc")
+    seg_qc = sub.add_parser("segmentation-qc", help="Generate segmentation validation figures and JSON.")
     _add_qc_inputs(seg_qc)
     seg_qc.add_argument("--individual-mask", action="append", default=[])
     _add_common_runtime(seg_qc)
 
-    bbox = sub.add_parser("bbox")
+    bbox = sub.add_parser("bbox", help="Compute the half-open lung bbox and geometry-preserving crops.")
     _add_image_mask_case(bbox)
     bbox.add_argument("--padding-mm", type=float, nargs="+")
     bbox.add_argument("--padding-voxels", type=int, nargs="+")
@@ -92,7 +94,7 @@ def build_parser() -> argparse.ArgumentParser:
     bbox.add_argument("--output-root")
     _add_common_runtime(bbox)
 
-    bbox_qc = sub.add_parser("bbox-qc")
+    bbox_qc = sub.add_parser("bbox-qc", help="Generate independent bounding-box QC figures and JSON.")
     _add_image_mask_case(bbox_qc)
     bbox_qc.add_argument("--bbox-json", required=True)
     bbox_qc.add_argument("--crop-image")
@@ -100,11 +102,13 @@ def build_parser() -> argparse.ArgumentParser:
     bbox_qc.add_argument("--output-dir")
     _add_common_runtime(bbox_qc)
 
-    export = sub.add_parser("export")
+    export = sub.add_parser("export", help="Optional compatibility-gated RTSTRUCT/fallback export.")
     _add_export_args(export)
     _add_common_runtime(export)
 
-    prepare_itksnap = sub.add_parser("prepare-itksnap")
+    prepare_itksnap = sub.add_parser(
+        "prepare-itksnap", help="Prepare primary ITK-SNAP multilabel viewer products."
+    )
     prepare_itksnap.add_argument("--image", required=True)
     prepare_itksnap.add_argument("--left-lung", required=True)
     prepare_itksnap.add_argument("--right-lung", required=True)
@@ -114,7 +118,7 @@ def build_parser() -> argparse.ArgumentParser:
     prepare_itksnap.add_argument("--output-root")
     _add_common_runtime(prepare_itksnap)
 
-    launch = sub.add_parser("launch")
+    launch = sub.add_parser("launch", help="Launch ITK-SNAP or an optional DICOM viewer.")
     launch.add_argument("--dicom-dir")
     launch.add_argument("--rtstruct")
     launch.add_argument("--fallback-dir")
@@ -134,6 +138,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     run_all = sub.add_parser(
         "run-all",
+        help="Run the MR pipeline through ITK-SNAP viewer-product preparation.",
         description=(
             "Run the processing pipeline and automatically prepare ITK-SNAP viewer products. "
             "Launching is optional; a geometry-preserving NIfTI is sufficient for ITK-SNAP. "
@@ -337,8 +342,22 @@ def command_prepare_itksnap(args, config) -> dict[str, Any]:
 
 def command_launch(args) -> dict[str, Any]:
     if args.viewer == "itksnap":
+        if any(
+            getattr(args, name, None)
+            for name in ("dicom_dir", "rtstruct", "fallback_dir", "nifti")
+        ):
+            raise ValueError(
+                "ITK-SNAP launch cannot be combined with DICOM/RTSTRUCT viewer arguments."
+            )
         installation = detect_itksnap()
         if getattr(args, "health_check", False):
+            if any(
+                getattr(args, name, None)
+                for name in ("image", "segmentation", "labels", "overlay", "workspace")
+            ):
+                raise ValueError(
+                    "--health-check cannot be combined with image or workspace launch arguments."
+                )
             checked = check_itksnap_health(installation)
             return {
                 "viewer": "itksnap",
@@ -357,6 +376,13 @@ def command_launch(args) -> dict[str, Any]:
             installation=installation,
         )
         return launch_plan(plan, dry_run=args.dry_run)
+    if any(
+        getattr(args, name, None)
+        for name in ("image", "segmentation", "labels", "overlay", "workspace")
+    ):
+        raise ValueError(
+            "OsiriX/Horos launch cannot be combined with ITK-SNAP image arguments."
+        )
     plan = build_launch_plan(
         dicom_dir=args.dicom_dir,
         rtstruct_path=args.rtstruct,
@@ -382,6 +408,8 @@ def run_all(args, config: dict[str, Any], stage_functions: dict[str, Callable] |
     export_requested = bool(getattr(args, "export_rtstruct", False))
     if export_requested and not args.dicom_dir:
         raise ValueError("--export-rtstruct requires --dicom-dir.")
+    if launch_requested and viewer != "itksnap" and not args.dicom_dir:
+        raise ValueError("Launching OsiriX/Horos from run-all requires --dicom-dir.")
     if args.modality != "mr":
         raise ValueError("ITK-SNAP CT label preparation not yet configured; run-all viewer products currently require MR.")
     completed: list[str] = []
@@ -530,9 +558,12 @@ def run_all(args, config: dict[str, Any], stage_functions: dict[str, Callable] |
         launch_args = _namespace_from(
             args,
             viewer=viewer,
-            image=args.image,
-            segmentation=[str(paths["itksnap_combined"])],
-            labels=str(paths["itksnap_labels"]),
+            dicom_dir=args.dicom_dir if viewer != "itksnap" else None,
+            image=args.image if viewer == "itksnap" else None,
+            segmentation=(
+                [str(paths["itksnap_combined"])] if viewer == "itksnap" else []
+            ),
+            labels=str(paths["itksnap_labels"]) if viewer == "itksnap" else None,
             overlay=[],
             workspace=None,
             health_check=False,
@@ -603,6 +634,16 @@ def _valid_itksnap_package(paths: dict[str, Any], image_path: str | Path) -> boo
         if manifest.get("completion_status") != "complete":
             return False
         if manifest.get("image_path") != display_path(image_path):
+            return False
+        expected_labels = {str(value): name for value, name in LABEL_MAPPING.items()}
+        if manifest.get("label_mapping") != expected_labels:
+            return False
+        bbox_convention = manifest.get("bbox_convention", "")
+        if not (
+            "half-open" in bbox_convention
+            and "z,y,x" in bbox_convention
+            and "max-1" in bbox_convention
+        ):
             return False
         geometry = manifest.get("image_geometry", {})
         current = summarize_geometry(sitk.ReadImage(str(image_path)))

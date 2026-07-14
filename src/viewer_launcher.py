@@ -42,7 +42,7 @@ def detect_itksnap(
     *,
     application_paths: Sequence[str | Path] | None = None,
 ) -> ITKSnapInstallation:
-    """Inspect only the supported system and per-user ITK-SNAP locations."""
+    """Detect the primary viewer in system-first macOS application locations."""
 
     if platform.system() != "Darwin":
         return ITKSnapInstallation(
@@ -64,7 +64,7 @@ def detect_itksnap(
             return ITKSnapInstallation(
                 status="unhealthy",
                 bundle_path=bundle,
-                message=f"Could not read ITK-SNAP Info.plist: {exc}",
+                message=f"Could not read ITK-SNAP Info.plist; reinstall ITK-SNAP: {exc}",
             )
         executable_name = metadata.get("CFBundleExecutable")
         if not isinstance(executable_name, str) or not executable_name.strip():
@@ -73,13 +73,16 @@ def detect_itksnap(
                 bundle_path=bundle,
                 short_version=metadata.get("CFBundleShortVersionString"),
                 bundle_version=metadata.get("CFBundleVersion"),
-                message="ITK-SNAP Info.plist does not define CFBundleExecutable.",
+                message=(
+                    "ITK-SNAP Info.plist does not define CFBundleExecutable; "
+                    "reinstall ITK-SNAP."
+                ),
             )
         executable = bundle / "Contents" / "MacOS" / executable_name
         if not executable.is_file():
-            message = "The ITK-SNAP bundle executable is missing."
+            message = "The ITK-SNAP bundle executable is missing; reinstall ITK-SNAP."
         elif not os.access(executable, os.X_OK):
-            message = "The ITK-SNAP bundle executable is not executable."
+            message = "The ITK-SNAP bundle executable is not executable; reinstall ITK-SNAP."
         else:
             return ITKSnapInstallation(
                 status="available",
@@ -96,7 +99,13 @@ def detect_itksnap(
             bundle_version=metadata.get("CFBundleVersion"),
             message=message,
         )
-    return ITKSnapInstallation(status="not_found", message="ITK-SNAP was not found.")
+    return ITKSnapInstallation(
+        status="not_found",
+        message=(
+            "ITK-SNAP was not found; install ITK-SNAP.app in /Applications "
+            "or ~/Applications."
+        ),
+    )
 
 
 def check_itksnap_health(
@@ -144,6 +153,7 @@ def build_itksnap_launch_plan(
     workspace_path: str | Path | None = None,
     installation: ITKSnapInstallation | None = None,
 ) -> LaunchPlan:
+    """Build the primary NIfTI viewer command without shell interpretation."""
     installation = installation or detect_itksnap()
     if installation.status != "available" or installation.executable_path is None:
         raise RuntimeError(installation.message or "ITK-SNAP is unavailable.")
@@ -223,6 +233,7 @@ def build_launch_plan(
     nifti_paths: Sequence[str | Path] = (),
     viewer: str | None = None,
 ) -> LaunchPlan:
+    """Build an optional OsiriX/Horos compatibility launch plan."""
     if platform.system() != "Darwin":
         raise RuntimeError("Viewer launching is supported only on macOS.")
     selected = choose_viewer(viewer)

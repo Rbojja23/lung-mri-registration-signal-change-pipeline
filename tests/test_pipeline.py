@@ -19,7 +19,17 @@ from version import PIPELINE_VERSION  # noqa: E402
 def test_version_output(capsys):
     with pytest.raises(SystemExit):
         pipeline.build_parser().parse_args(["--version"])
-    assert PIPELINE_VERSION in capsys.readouterr().out
+    assert PIPELINE_VERSION == "1.1.0"
+    assert capsys.readouterr().out.strip() == "1.1.0"
+
+
+def test_top_level_help_presents_itksnap_primary(capsys):
+    with pytest.raises(SystemExit):
+        pipeline.build_parser().parse_args(["--help"])
+    help_text = capsys.readouterr().out
+    assert "pipeline v1.1.0" in help_text
+    assert "prepare-itksnap" in help_text
+    assert "primary ITK-SNAP" in help_text
 
 
 def test_unified_cli_argument_parsing():
@@ -180,6 +190,17 @@ def test_resume_rejects_partial_itksnap_package(tmp_path):
     )
     assert "prepare-itksnap" in calls
     assert captured["overwrite"] is True
+
+
+@pytest.mark.parametrize("field", ["label_mapping", "bbox_convention"])
+def test_resume_rejects_stale_itksnap_semantics(tmp_path, field):
+    paths = pipeline._run_all_paths(tmp_path / "outputs", "case", "mr")
+    image_path, geometry = write_reference_image(tmp_path / "image.nii.gz")
+    write_valid_itksnap_package(paths, image_path, geometry)
+    manifest = json.loads(paths["itksnap_manifest"].read_text())
+    manifest[field] = {} if field == "label_mapping" else "closed xyz"
+    paths["itksnap_manifest"].write_text(json.dumps(manifest))
+    assert not pipeline._valid_itksnap_package(paths, image_path)
 
 
 def test_mr_semantic_mask_resolution():
@@ -345,6 +366,22 @@ def test_non_macos_launch_failure(monkeypatch):
         viewer_launcher.build_launch_plan(dicom_dir="dicom")
 
 
+def test_launch_rejects_mixed_viewer_arguments():
+    args = Namespace(
+        viewer="itksnap", dicom_dir="dicom", rtstruct=None, fallback_dir=None,
+        nifti=[], image=None, segmentation=[], labels=None, overlay=[],
+        workspace=None, health_check=False, dry_run=True,
+    )
+    with pytest.raises(ValueError, match="cannot be combined"):
+        pipeline.command_launch(args)
+
+    args.viewer = "osirix"
+    args.dicom_dir = None
+    args.image = "image.nii.gz"
+    with pytest.raises(ValueError, match="cannot be combined"):
+        pipeline.command_launch(args)
+
+
 def stage_functions(calls):
     def stage(name):
         return lambda *args, **kwargs: calls.append(name) or {"status": "ok"}
@@ -377,6 +414,10 @@ def write_valid_itksnap_package(paths, image_path, geometry):
     paths["itksnap_manifest"].write_text(json.dumps({
         "completion_status": "complete",
         "image_path": pipeline.display_path(image_path),
+        "label_mapping": {
+            str(value): name for value, name in pipeline.LABEL_MAPPING.items()
+        },
+        "bbox_convention": "half-open NumPy z,y,x [min:max); shell faces use min and max-1",
         "image_geometry": {
             "size_xyz": list(geometry.size_xyz),
             "spacing_xyz": list(geometry.spacing_xyz),
