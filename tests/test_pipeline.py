@@ -210,6 +210,88 @@ def test_mr_semantic_mask_resolution():
     ]
 
 
+def test_run_all_passes_semantic_individual_masks_to_segmentation_qc(tmp_path):
+    captured = {}
+    funcs = stage_functions([])
+    funcs["segmentation-qc"] = lambda args: captured.update(vars(args)) or {"status": "ok"}
+
+    pipeline.run_all(
+        run_all_args(tmp_path, dry_run=False),
+        {"output_root": str(tmp_path / "outputs"), "launch": {"enabled": False}},
+        stage_functions=funcs,
+    )
+
+    lungs = tmp_path / "outputs/totalsegmentator/case/lungs"
+    assert captured["individual_mask"] == [
+        f"lung_left={lungs / 'lung_left.nii.gz'}",
+        f"lung_right={lungs / 'lung_right.nii.gz'}",
+    ]
+
+
+def test_run_all_segmentation_qc_masks_are_explicitly_empty_when_unavailable():
+    assert pipeline._run_all_segmentation_qc_masks({"individual_masks": []}, "mr") == []
+    assert pipeline._run_all_segmentation_qc_masks({}, "ct") == []
+
+
+def test_resume_after_segmentation_runs_qc_without_rerunning_segmentation(tmp_path):
+    output_root = tmp_path / "outputs"
+    paths = pipeline._run_all_paths(output_root, "case", "mr")
+    for path in [
+        paths["segment_manifest"],
+        paths["combined_mask"],
+        *paths["individual_masks"],
+    ]:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("complete")
+    calls = []
+    captured = {}
+    funcs = stage_functions(calls)
+    funcs["segment"] = lambda *args: pytest.fail("segmentation must be reused")
+    funcs["segmentation-qc"] = (
+        lambda args: captured.update(vars(args))
+        or calls.append("segmentation-qc")
+        or {"status": "ok"}
+    )
+
+    result = pipeline.run_all(
+        run_all_args(tmp_path, resume=True, dry_run=False),
+        {"output_root": str(output_root), "launch": {"enabled": False}},
+        stage_functions=funcs,
+    )
+
+    assert result["segment"]["status"] == "reused"
+    assert "segment" not in calls
+    assert "segmentation-qc" in calls
+    assert len(captured["individual_mask"]) == 2
+
+
+def test_dedicated_segmentation_qc_repeated_masks_remain_unchanged(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        pipeline,
+        "run_segmentation_qc",
+        lambda **kwargs: captured.update(kwargs) or {"status": "ok"},
+    )
+    args = pipeline.build_parser().parse_args(
+        [
+            "segmentation-qc",
+            "--image", "image.nii.gz",
+            "--mask", "combined.nii.gz",
+            "--case-id", "case",
+            "--modality", "mr",
+            "--individual-mask", "lung_left=left.nii.gz",
+            "--individual-mask", "lung_right=right.nii.gz",
+        ]
+    )
+
+    pipeline.command_segmentation_qc(args)
+
+    assert [(item.label, str(item.path)) for item in captured["individual_masks"]] == [
+        ("lung_left", "left.nii.gz"),
+        ("lung_right", "right.nii.gz"),
+    ]
+
+
 def test_missing_mr_semantic_mask_fails_clearly(tmp_path):
     funcs = stage_functions([])
     funcs["prepare-itksnap"] = pipeline.command_prepare_itksnap

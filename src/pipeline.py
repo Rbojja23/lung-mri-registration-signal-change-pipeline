@@ -461,7 +461,12 @@ def run_all(args, config: dict[str, Any], stage_functions: dict[str, Callable] |
                 else funcs["segment"](args, config)
             ),
         )
-        seg_qc_args = _namespace_from(args, mask=str(paths["combined_mask"]), output_dir=str(paths["figures_dir"]))
+        seg_qc_args = _namespace_from(
+            args,
+            mask=str(paths["combined_mask"]),
+            output_dir=str(paths["figures_dir"]),
+            individual_mask=_run_all_segmentation_qc_masks(paths, args.modality),
+        )
         results["segmentation-qc"] = run_stage(
             3,
             "segmentation-qc",
@@ -760,6 +765,18 @@ def _run_all_paths(output_root: Path, case_id: str, modality: str) -> dict[str, 
         "rtstruct": output_root / "osirix" / case_id / "lung_segmentation_and_bbox_rtstruct.dcm",
         "fallback_dir": output_root / "osirix" / case_id / "review_package",
     }
+
+
+def _run_all_segmentation_qc_masks(
+    paths: dict[str, Any], modality: str
+) -> list[str]:
+    if modality != "mr":
+        return []
+    labels = ("lung_left", "lung_right")
+    return [
+        f"{label}={path}"
+        for label, path in zip(labels, paths.get("individual_masks", []))
+    ]
 
 
 def _write_run_log(
