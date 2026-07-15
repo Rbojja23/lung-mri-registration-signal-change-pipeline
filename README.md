@@ -79,6 +79,49 @@ python src/check_deedsbcv.py --health-check --json
 Compiled deedsBCV binaries, third-party build files, medical inputs, and future
 registration outputs must not be committed.
 
+## Registration input preparation
+
+Registration roles are always explicit: callers must supply both `--fixed` and
+`--moving`. The preparation tool does not infer roles from filenames, ordering,
+dimensions, or intensities. Provisional assignments can be documented with
+`--role-assignment-source`; omit `--roles-confirmed` until a researcher confirms
+the direction. The moving image will eventually be transformed into the fixed
+image's coordinate space.
+
+This checkpoint accepts scalar 3D `.nii` and `.nii.gz` images, validates finite
+values and geometry, and creates role-named `.nii.gz` working copies without
+casting, normalization, reorientation, or resampling. Preparation requires a
+matching fixed/moving voxel grid and approximately isotropic spacing. deedsBCV
+does not properly account for anisotropic spacing, so anisotropic or mismatched
+grids are reported in dry-run and rejected in real preparation until a later
+resampling checkpoint.
+
+Preview preparation without creating directories:
+
+```bash
+python src/prepare_registration_inputs.py \
+  --fixed data/raw/registration_test/<case>/<fixed>.nii \
+  --moving data/raw/registration_test/<case>/<moving>.nii \
+  --case-id <non-identifying-case-id> \
+  --experiment full \
+  --role-assignment-source manual \
+  --roles-confirmed \
+  --dry-run
+```
+
+Prepared files are written under:
+
+```text
+outputs/registration/<case_id>/<experiment>/preprocessed/
+    fixed.nii.gz
+    moving.nii.gz
+    preprocessing_manifest.json
+```
+
+The local manifest records role-confirmation status, safe geometry, streamed
+source/output checksums, and post-write verification. It contains no arbitrary
+NIfTI metadata. No registration binary is run by this preparation command.
+
 ## Data privacy
 
 Medical data must remain local. `data/raw/`, `outputs/`, DICOM, NIfTI, and NumPy
