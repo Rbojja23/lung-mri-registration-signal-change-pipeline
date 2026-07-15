@@ -1,6 +1,7 @@
 # Private medical image data and generated artifacts
 data/raw/
 outputs/
+outputs/registration/
 
 # Medical image formats and derived local arrays
 *.dcm
@@ -21,6 +22,16 @@ data/manifests/
 *.tcia
 tmp/
 temp/
+
+# Locally fetched/built deedsBCV artifacts (UPSTREAM.md remains tracked)
+third_party/deedsBCV/source/
+third_party/deedsBCV/build-arm64/
+third_party/deedsBCV/*.log
+third_party/deedsBCV/**/*.o
+third_party/deedsBCV/**/linearBCV
+third_party/deedsBCV/**/deedsBCV
+third_party/deedsBCV/**/applyBCV
+third_party/deedsBCV/**/applyBCVfloat
 
 # Python cache and test cache files
 __pycache__/

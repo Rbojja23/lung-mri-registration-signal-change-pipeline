@@ -41,6 +41,44 @@ Read-only health check:
 python src/pipeline.py launch --viewer itksnap --health-check
 ```
 
+## deedsBCV setup checkpoint
+
+[deedsBCV](https://github.com/mattiaspaul/deedsBCV) is an external MIT-licensed
+registration project. This checkpoint provides reproducible source setup and
+help-only executable health checks; registration itself is not implemented yet.
+The pinned upstream revision is
+`00b46539aa03d23988a241173d8f1f6c0c68dc6a`.
+
+On Apple Silicon, do not use the normal upstream Makefile unchanged: its AVX2
+and SSE4.2 flags target x86 CPUs. The setup script builds all four tools with
+`clang++`, arm64-safe flags, and zlib. Homebrew `libomp` is used when available;
+the script never installs it silently. A serial fallback is available with
+`--without-openmp`. Cloned source and compiled binaries remain under ignored
+directories; provenance is recorded in `third_party/deedsBCV/UPSTREAM.md`.
+
+Run diagnostics without cloning or compiling:
+
+```bash
+scripts/setup_deedsbcv_macos.sh --check-only
+```
+
+Build with OpenMP, or explicitly select the serial fallback:
+
+```bash
+scripts/setup_deedsbcv_macos.sh
+scripts/setup_deedsbcv_macos.sh --without-openmp
+```
+
+Run safe discovery and help-only health probes:
+
+```bash
+python src/check_deedsbcv.py --health-check
+python src/check_deedsbcv.py --health-check --json
+```
+
+Compiled deedsBCV binaries, third-party build files, medical inputs, and future
+registration outputs must not be committed.
+
 ## Data privacy
 
 Medical data must remain local. `data/raw/`, `outputs/`, DICOM, NIfTI, and NumPy

@@ -12,3 +12,6 @@ display:
 launch:
   enabled: false
   viewer: itksnap
+registration:
+  deeds_bin_dir: null
+  timeout_seconds: 3600
