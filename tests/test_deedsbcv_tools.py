@@ -1,4 +1,5 @@
 from pathlib import Path
+import hashlib
 import json
 import subprocess
 import sys
@@ -15,6 +16,7 @@ from deedsbcv_tools import (  # noqa: E402
     check_deedsbcv_health,
     discover_deedsbcv,
     installation_summary,
+    validate_project_local_build,
 )
 
 
@@ -32,6 +34,52 @@ def install(directory: Path, names=("linearBCV", "deedsBCV", "applyBCV", "applyB
 
 def no_config(tmp_path: Path) -> Path:
     return tmp_path / "missing-config.yaml"
+
+
+def local_patched_installation(tmp_path: Path, *, timestamp_epoch: float = 0):
+    source = tmp_path / "source"
+    source.mkdir()
+    subprocess.run(["git", "-C", str(source), "init"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(source), "config", "user.email", "test@example.invalid"], check=True)
+    subprocess.run(["git", "-C", str(source), "config", "user.name", "Test"], check=True)
+    (source / "src").mkdir()
+    target = source / "src" / "writer.h"
+    target.write_text("delete values;\n")
+    subprocess.run(["git", "-C", str(source), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(source), "commit", "-m", "base"], check=True, capture_output=True)
+    commit = subprocess.run(
+        ["git", "-C", str(source), "rev-parse", "HEAD"], check=True, capture_output=True, text=True
+    ).stdout.strip()
+    target.write_text("delete []values;\n")
+    patch = tmp_path / "0001-fix-nifti-writer-and-array-deallocation.patch"
+    patch.write_bytes(
+        subprocess.run(
+            ["git", "-C", str(source), "diff", "--binary", "--no-ext-diff", "--", "src"],
+            check=True,
+            capture_output=True,
+        ).stdout
+    )
+    directory = tmp_path / "build"
+    install(directory, ("linearBCV", "deedsBCV"))
+    marker = directory / ".deedsbcv-build-state.json"
+    marker.write_text(
+        json.dumps(
+            {
+                "pinned_commit": commit,
+                "patch_sha256": hashlib.sha256(patch.read_bytes()).hexdigest(),
+                "timestamp_epoch": timestamp_epoch,
+            }
+        )
+    )
+    installation = discover_deedsbcv(
+        directory,
+        config_path=no_config(tmp_path),
+        project_build_dir=directory,
+        project_source_dir=source,
+        patch_path=patch,
+        expected_commit=commit,
+    )
+    return installation, source, patch, marker, commit
 
 
 def test_explicit_directory_has_highest_precedence(tmp_path):
@@ -199,6 +247,60 @@ def test_json_summary_hides_external_absolute_paths(tmp_path):
     assert str(tmp_path) not in encoded
     assert "[external path]" in encoded
     assert ".nii" not in encoded
+    assert installation_summary(installation)["patch"]["status"] == "not_required"
+
+
+def test_project_local_patch_sha_mismatch_is_unhealthy(tmp_path):
+    installation, _, _, marker, _ = local_patched_installation(tmp_path)
+    state = json.loads(marker.read_text())
+    state["patch_sha256"] = "0" * 64
+    marker.write_text(json.dumps(state))
+    result = validate_project_local_build(
+        installation,
+        source_dir=tmp_path / "source",
+        patch_path=tmp_path / "0001-fix-nifti-writer-and-array-deallocation.patch",
+        expected_commit=installation.patch.pinned_commit_found,
+    )
+    assert result.status == "unhealthy"
+    assert result.patch.status == "unhealthy"
+    assert "SHA-256 differs" in result.patch.message
+
+
+def test_project_local_stale_binary_is_unhealthy(tmp_path):
+    future = 4_102_444_800
+    installation, _, _, _, _ = local_patched_installation(
+        tmp_path, timestamp_epoch=future
+    )
+    assert installation.status == "unhealthy"
+    assert "required binary is stale" in installation.patch.message
+
+
+def test_project_local_missing_marker_is_unhealthy(tmp_path):
+    installation, source, patch, marker, commit = local_patched_installation(tmp_path)
+    marker.unlink()
+    result = validate_project_local_build(
+        installation,
+        source_dir=source,
+        patch_path=patch,
+        expected_commit=commit,
+    )
+    assert result.status == "unhealthy"
+    assert "marker is missing" in result.patch.message
+
+
+def test_json_health_report_includes_safe_patch_status(tmp_path, monkeypatch, capsys):
+    directory = tmp_path / "external tools"
+    install(directory, ("linearBCV", "deedsBCV"))
+    monkeypatch.setattr(
+        check_deedsbcv,
+        "check_deedsbcv_health",
+        lambda installation: installation,
+    )
+    code = check_deedsbcv.main(["--bin-dir", str(directory), "--health-check", "--json"])
+    report = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert report["patch"]["status"] == "not_required"
+    assert str(tmp_path) not in json.dumps(report)
 
 
 def test_cli_json_dry_run_executes_no_health_subprocess(tmp_path, monkeypatch, capsys):

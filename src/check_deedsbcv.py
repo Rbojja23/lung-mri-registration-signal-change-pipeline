@@ -39,6 +39,11 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print(f"deedsBCV status: {summary['status']}")
         print(f"Discovery source: {summary['source'] or 'none'}")
+        patch = summary["patch"]
+        print(f"Pinned commit expected: {patch['pinned_commit_expected']}")
+        print(f"Patch expected: {patch['patch_expected']}")
+        print(f"Patch SHA-256: {patch['patch_sha256'] or 'unavailable'}")
+        print(f"Patch status: {patch['status']} - {patch['message']}")
         for name, item in summary["binaries"].items():
             state = "found" if item["found"] else "missing"
             requirement = "required" if item["required"] else "optional"

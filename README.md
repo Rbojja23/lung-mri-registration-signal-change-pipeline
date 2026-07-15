@@ -44,17 +44,20 @@ python src/pipeline.py launch --viewer itksnap --health-check
 ## deedsBCV setup checkpoint
 
 [deedsBCV](https://github.com/mattiaspaul/deedsBCV) is an external MIT-licensed
-registration project. This checkpoint provides reproducible source setup and
-help-only executable health checks; registration itself is not implemented yet.
-The pinned upstream revision is
-`00b46539aa03d23988a241173d8f1f6c0c68dc6a`.
+registration project. The project pins upstream revision
+`00b46539aa03d23988a241173d8f1f6c0c68dc6a` and applies the tracked minimal
+patch in `third_party/deedsBCV/patches/` during setup. The patch fixes confirmed
+C++ undefined behavior that could produce zero NIfTI dimensions; it does not
+change registration mathematics.
 
 On Apple Silicon, do not use the normal upstream Makefile unchanged: its AVX2
-and SSE4.2 flags target x86 CPUs. The setup script builds all four tools with
-`clang++`, arm64-safe flags, and zlib. Homebrew `libomp` is used when available;
-the script never installs it silently. A serial fallback is available with
-`--without-openmp`. Cloned source and compiled binaries remain under ignored
-directories; provenance is recorded in `third_party/deedsBCV/UPSTREAM.md`.
+and SSE4.2 flags target x86 CPUs. The setup script requires `linearBCV` and
+`deedsBCV`; `applyBCV` and `applyBCVfloat` are optional because their upstream
+x86 intrinsic headers may be unavailable on arm64. Optional failures are
+reported without invalidating a successful required build. Homebrew `libomp`
+is used when available; `--without-openmp` selects the serial fallback.
+Cloned source, build-state metadata, and compiled binaries remain ignored;
+patch provenance is recorded in `third_party/deedsBCV/UPSTREAM.md`.
 
 Run diagnostics without cloning or compiling:
 
@@ -62,7 +65,7 @@ Run diagnostics without cloning or compiling:
 scripts/setup_deedsbcv_macos.sh --check-only
 ```
 
-Build with OpenMP, or explicitly select the serial fallback:
+Fresh setup with OpenMP, or explicitly with the serial fallback:
 
 ```bash
 scripts/setup_deedsbcv_macos.sh
@@ -75,6 +78,16 @@ Run safe discovery and help-only health probes:
 python src/check_deedsbcv.py --health-check
 python src/check_deedsbcv.py --health-check --json
 ```
+
+To force a clean rebuild safely, first save or confirm that the ignored source
+contains no needed changes beyond the tracked patch, then run:
+
+```bash
+scripts/setup_deedsbcv_macos.sh --force
+```
+
+The script refuses unrelated source modifications instead of silently
+discarding them. Registration outputs remain research-only and non-diagnostic.
 
 Compiled deedsBCV binaries, third-party build files, medical inputs, and future
 registration outputs must not be committed.
@@ -121,6 +134,57 @@ outputs/registration/<case_id>/<experiment>/preprocessed/
 The local manifest records role-confirmation status, safe geometry, streamed
 source/output checksums, and post-write verification. It contains no arbitrary
 NIfTI metadata. No registration binary is run by this preparation command.
+
+## Default deedsBCV registration
+
+Registration requires a completed `preprocessed/` directory from the input
+preparation checkpoint. The standalone runner validates its manifest and
+checksums, then runs full-volume affine registration followed by deformable
+registration. Fixed and moving roles are never inferred or reversed.
+
+The baseline uses upstream defaults by omission. The generated commands contain
+only the required `-F`, `-M`, and `-O` arguments, plus the affine matrix `-A` for
+the deformable stage; no `-G`, `-L`, `-Q`, `-a`, or segmentation option is added.
+
+Preview the exact commands without creating files or executing binaries:
+
+```bash
+python src/run_deedsbcv_registration.py \
+  --prepared-dir outputs/registration/<case_id>/full/preprocessed \
+  --case-id <case_id> \
+  --experiment full \
+  --bin-dir third_party/deedsBCV/build-arm64 \
+  --dry-run
+```
+
+Registration products are scoped to the selected experiment:
+
+```text
+outputs/registration/<case_id>/full/
+    preprocessed/                     preserved inputs
+    affine/
+        affine_matrix.txt
+        linear_stdout.log
+        linear_stderr.log
+    deformable/
+        moving_registered.nii.gz
+        displacements.dat
+        deeds_stdout.log
+        deeds_stderr.log
+    registration_manifest.json
+```
+
+The timeout applies independently to each stage and defaults to
+`registration.timeout_seconds` in `config/default.yaml`. A timeout,
+interruption, nonzero exit, or malformed output leaves an incomplete manifest
+and is never reported as success. `--resume` reuses only semantically matching,
+verified stages; `--overwrite` replaces only registration products for the
+selected case and experiment while preserving prepared inputs. These options
+are mutually exclusive.
+
+This workflow is research-only and non-diagnostic. Output plausibility checks
+do not establish anatomical correctness; registration QC is the next planned
+checkpoint. Cropped registration is not implemented here.
 
 ## Data privacy
 

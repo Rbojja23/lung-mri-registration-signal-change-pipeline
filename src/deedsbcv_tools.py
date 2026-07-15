@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+import hashlib
+import json
 import os
 from pathlib import Path
 import shutil
@@ -16,6 +18,16 @@ REQUIRED_BINARIES = ("linearBCV", "deedsBCV")
 OPTIONAL_BINARIES = ("applyBCV", "applyBCVfloat")
 EXPECTED_BINARIES = REQUIRED_BINARIES + OPTIONAL_BINARIES
 DEFAULT_BUILD_DIR = PROJECT_ROOT / "third_party" / "deedsBCV" / "build-arm64"
+DEFAULT_SOURCE_DIR = PROJECT_ROOT / "third_party" / "deedsBCV" / "source"
+DEFAULT_PATCH_PATH = (
+    PROJECT_ROOT
+    / "third_party"
+    / "deedsBCV"
+    / "patches"
+    / "0001-fix-nifti-writer-and-array-deallocation.patch"
+)
+EXPECTED_PINNED_COMMIT = "00b46539aa03d23988a241173d8f1f6c0c68dc6a"
+BUILD_STATE_FILENAME = ".deedsbcv-build-state.json"
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config" / "default.yaml"
 
 
@@ -28,6 +40,19 @@ class BinaryHealth:
 
 
 @dataclass(frozen=True)
+class PatchHealth:
+    project_local: bool
+    status: str
+    message: str
+    pinned_commit_expected: str = EXPECTED_PINNED_COMMIT
+    pinned_commit_found: str | None = None
+    patch_expected: str = DEFAULT_PATCH_PATH.name
+    patch_sha256: str | None = None
+    source_patched: bool | None = None
+    build_state_found: bool | None = None
+
+
+@dataclass(frozen=True)
 class DeedsBCVInstallation:
     status: str
     binaries: dict[str, Path | None]
@@ -35,6 +60,7 @@ class DeedsBCVInstallation:
     bin_dir: Path | None = None
     message: str | None = None
     health: dict[str, BinaryHealth] = field(default_factory=dict)
+    patch: PatchHealth | None = None
 
     @property
     def required_available(self) -> bool:
@@ -58,6 +84,9 @@ def discover_deedsbcv(
     project_build_dir: str | Path = DEFAULT_BUILD_DIR,
     path: str | None = None,
     which: Callable[..., str | None] = shutil.which,
+    project_source_dir: str | Path = DEFAULT_SOURCE_DIR,
+    patch_path: str | Path = DEFAULT_PATCH_PATH,
+    expected_commit: str = EXPECTED_PINNED_COMMIT,
 ) -> DeedsBCVInstallation:
     """Discover deedsBCV using bounded, deterministic precedence."""
     env = os.environ if environ is None else environ
@@ -77,7 +106,15 @@ def discover_deedsbcv(
         directory = Path(value).expanduser().resolve(strict=False)
         binaries = {name: resolve_binary_path(directory, name) for name in EXPECTED_BINARIES}
         if authoritative or any(binaries.values()):
-            return _installation_from_paths(binaries, source=source, bin_dir=directory)
+            installation = _installation_from_paths(binaries, source=source, bin_dir=directory)
+            if directory == Path(project_build_dir).expanduser().resolve(strict=False):
+                return validate_project_local_build(
+                    installation,
+                    source_dir=project_source_dir,
+                    patch_path=patch_path,
+                    expected_commit=expected_commit,
+                )
+            return installation
 
     binaries = {
         name: _which_path(name, path=path, which=which)
@@ -163,7 +200,132 @@ def installation_summary(installation: DeedsBCVInstallation) -> dict[str, object
             for name, result in installation.health.items()
         },
         "message": installation.message,
+        "patch": _patch_summary(installation.patch),
     }
+
+
+def validate_project_local_build(
+    installation: DeedsBCVInstallation,
+    *,
+    source_dir: str | Path = DEFAULT_SOURCE_DIR,
+    patch_path: str | Path = DEFAULT_PATCH_PATH,
+    expected_commit: str = EXPECTED_PINNED_COMMIT,
+) -> DeedsBCVInstallation:
+    """Validate provenance metadata only for the managed project-local build."""
+    source = Path(source_dir).expanduser().resolve(strict=False)
+    patch = Path(patch_path).expanduser().resolve(strict=False)
+    bin_dir = installation.bin_dir
+    if bin_dir is None:
+        return installation
+    marker = bin_dir / BUILD_STATE_FILENAME
+    patch_hash = _sha256_file(patch) if patch.is_file() else None
+    commit = _git_output(source, "rev-parse", "HEAD")
+    source_patched = False
+    if patch.is_file() and commit == expected_commit:
+        try:
+            source_diff = subprocess.run(
+                ["git", "-C", str(source), "diff", "--binary", "--no-ext-diff", "--", "src"],
+                shell=False,
+                capture_output=True,
+                check=True,
+            ).stdout
+            source_patched = source_diff == patch.read_bytes()
+        except (OSError, subprocess.SubprocessError):
+            source_patched = False
+
+    problem: str | None = None
+    state: dict[str, object] = {}
+    if not patch.is_file():
+        problem = "tracked patch is missing"
+    elif commit != expected_commit:
+        problem = "project-local source is not at the pinned commit"
+    elif not source_patched:
+        problem = "project-local source does not exactly match the tracked patch"
+    elif not marker.is_file():
+        problem = "build-state marker is missing"
+    else:
+        try:
+            state = json.loads(marker.read_text())
+        except (OSError, json.JSONDecodeError):
+            problem = "build-state marker is unreadable"
+    if problem is None and state.get("pinned_commit") != expected_commit:
+        problem = "build-state pinned commit differs"
+    if problem is None and state.get("patch_sha256") != patch_hash:
+        problem = "build-state patch SHA-256 differs"
+    build_epoch = state.get("timestamp_epoch")
+    if problem is None and not isinstance(build_epoch, (int, float)):
+        problem = "build-state timestamp is missing"
+    if problem is None:
+        for name in REQUIRED_BINARIES:
+            executable = installation.binaries.get(name)
+            if executable is None or executable.stat().st_mtime < float(build_epoch):
+                problem = f"required binary is stale: {name}"
+                break
+
+    patch_health = PatchHealth(
+        project_local=True,
+        status="healthy" if problem is None else "unhealthy",
+        message=(
+            "Project-local source and required binaries match the tracked patch."
+            if problem is None
+            else problem
+        ),
+        pinned_commit_expected=expected_commit,
+        pinned_commit_found=commit,
+        patch_sha256=patch_hash,
+        source_patched=source_patched,
+        build_state_found=marker.is_file(),
+    )
+    if problem is None:
+        return replace(installation, patch=patch_health)
+    return replace(installation, status="unhealthy", message=problem, patch=patch_health)
+
+
+def _patch_summary(patch: PatchHealth | None) -> dict[str, object]:
+    if patch is None:
+        return {
+            "project_local": False,
+            "status": "not_required",
+            "message": "External installations do not require project-local patch metadata.",
+            "pinned_commit_expected": EXPECTED_PINNED_COMMIT,
+            "patch_expected": DEFAULT_PATCH_PATH.name,
+            "patch_sha256": _sha256_file(DEFAULT_PATCH_PATH) if DEFAULT_PATCH_PATH.is_file() else None,
+            "source_patched": None,
+            "build_state_found": None,
+        }
+    return {
+        "project_local": patch.project_local,
+        "status": patch.status,
+        "message": patch.message,
+        "pinned_commit_expected": patch.pinned_commit_expected,
+        "pinned_commit_found": patch.pinned_commit_found,
+        "patch_expected": patch.patch_expected,
+        "patch_sha256": patch.patch_sha256,
+        "source_patched": patch.source_patched,
+        "build_state_found": patch.build_state_found,
+    }
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _git_output(directory: Path, *arguments: str) -> str | None:
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(directory), *arguments],
+            shell=False,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return completed.stdout.strip()
 
 
 def _installation_from_paths(

@@ -1,0 +1,285 @@
+diff --git a/src/MINDSSCbox.h b/src/MINDSSCbox.h
+index 0ec5851..9e8cc0f 100644
+--- a/src/MINDSSCbox.h
++++ b/src/MINDSSCbox.h
+@@ -120,7 +120,7 @@ void distances(float* im1,float* d1,int m,int n,int o,int qs,int l){
+ 			d1[i+l*sz1]=w1[i];
+ 		}
+ 	
+-    delete temp1; delete temp2; delete w1;
++    delete []temp1; delete []temp2; delete []w1;
+ }
+ 
+ //__builtin_popcountll(left[i]^right[i]); absolute hamming distances
+@@ -226,7 +226,7 @@ void descriptor(uint64_t* mindq,float* im1,int m,int n,int o,int qs){
+ 
+     gettimeofday(&time2, NULL);
+     float timeMIND2=time2.tv_sec+time2.tv_usec/1e6-(time1.tv_sec+time1.tv_usec/1e6);
+-    delete d1;
++    delete []d1;
+     
+ 
+ }
+diff --git a/src/QRsolve.h b/src/QRsolve.h
+index a5d098a..3174867 100644
+--- a/src/QRsolve.h
++++ b/src/QRsolve.h
+@@ -224,11 +224,11 @@ void findRigid(float* RT,float* pts1t,float* pts2t,int len){
+         RT[3+i*4]=t0[i];
+     }
+ 	
+-	delete pts1;
+-	delete pts2;
++	delete []pts1;
++	delete []pts2;
+     
+    // delete pts2_4;
+-    delete Rpts2;
++    delete []Rpts2;
+ 	
+ }
+ 
+@@ -292,6 +292,6 @@ void affineRobust(float* RT,float* pts1,float* pts2,int len){
+ 		
+ 		
+ 	}	
+-	delete pts1b; delete pts2b; delete err; delete err2;
++	delete []pts1b; delete []pts2b; delete []err; delete []err2;
+ 	
+ }
+\ No newline at end of file
+diff --git a/src/affineLTS1.h b/src/affineLTS1.h
+index bb2178c..c489fdc 100644
+--- a/src/affineLTS1.h
++++ b/src/affineLTS1.h
+@@ -226,10 +226,10 @@ void estimateAffine2(float* X,float* Xprev,float* im1,float* im2,float* costall,
+     matmult(X1,Xprev,X);
+ 
+   
+-    delete minval; delete minval2;
+-    delete minind; delete minind2;
+-    delete pts1; delete pts2;
+-    delete xs; delete ys; delete zs;
++    delete []minval; delete []minval2;
++    delete []minind; delete []minind2;
++    delete []pts1; delete []pts2;
++    delete []xs; delete []ys; delete []zs;
+     
+     
+    // estimateAffine(X,Xprev,costall,validind,costall2,validind2,step1,quant1,hw1);
+diff --git a/src/dataCostD.h b/src/dataCostD.h
+index 3d04685..cd72afa 100644
+--- a/src/dataCostD.h
++++ b/src/dataCostD.h
+@@ -202,7 +202,7 @@ void dataCostCL(unsigned long* data,unsigned long* data2,float* results,int m,in
+     }
+     
+     
+-    delete data2p;
++    delete []data2p;
+     
+     return;
+     
+diff --git a/src/deedsBCV0.cpp b/src/deedsBCV0.cpp
+index 96a9afb..1fc997d 100644
+--- a/src/deedsBCV0.cpp
++++ b/src/deedsBCV0.cpp
+@@ -321,15 +321,15 @@ int main (int argc, char * const argv[]) {
+ 		m2=m1; n2=n1; o2=o1;
+ 		cout<<"\n";
+        
+-		delete u0; delete v0; delete w0;
+-		delete costall;
++		delete []u0; delete []v0; delete []w0;
++		delete []costall;
+         
+-		delete parents; delete ordered;
++		delete []parents; delete []ordered;
+         
+ 		
+ 	}
+-    delete im1_mind;
+-    delete im1b_mind;
++    delete []im1_mind;
++    delete []im1b_mind;
+ 	//==========================================================================================
+ 	//==========================================================================================
+ 	
+diff --git a/src/diceMulti.cpp b/src/diceMulti.cpp
+index c5fddf6..d203cfa 100644
+--- a/src/diceMulti.cpp
++++ b/src/diceMulti.cpp
+@@ -74,7 +74,7 @@ int main(int argc,char * const argv[]){
+         }
+         outfile<<"\n";
+     }*/
+-    delete countvol;
++    delete []countvol;
+     return 0;
+ }
+ 
+diff --git a/src/imageIOgzType.h b/src/imageIOgzType.h
+index c27ccff..717f827 100644
+--- a/src/imageIOgzType.h
++++ b/src/imageIOgzType.h
+@@ -95,7 +95,7 @@ void readNifti(string filestr,Type*& vol,char*& header,int& m,int& n,int& o,int&
+             printf("Datatype %d not supported. Exiting.\n",datatype[0]);
+             exit(1);
+     }
+-    delete filecharptr;
++    delete []filecharptr;
+     
+     //gzread(file,vol,sz*sizeof(Type));
+     //vol=reinterpret_cast<Type*>(vol);
+@@ -117,7 +117,7 @@ void writeNifti(string filestr,float* vol,char* header,int m,int n,int o,int k){
+     if(k>1){
+         dim=4;
+     }
+-    short* dimensions=new short[4];
++    short* dimensions=new short[5];
+     dimensions[0]=dim; dimensions[1]=m; dimensions[2]=n; dimensions[3]=o;
+     dimensions[4]=k;
+     char* dimchar=reinterpret_cast<char*>(dimensions);
+@@ -191,7 +191,7 @@ void gzWriteNifti(string filestr,float* data,char* header,int m,int n,int o,int
+     copy(header,header+352,header2);
+     int dim=o>1?3:2;
+     if(p>1){ dim=4;}
+-    short* dimensions=new short[4];
++    short* dimensions=new short[5];
+     dimensions[0]=dim; dimensions[1]=m; dimensions[2]=n;
+     dimensions[3]=o; dimensions[4]=p;
+     char* dimchar=reinterpret_cast<char*>(dimensions);
+@@ -217,7 +217,7 @@ void gzWriteNifti(string filestr,float* data,char* header,int m,int n,int o,int
+     int err=gzwrite(file2,(unsigned char*)out2,size);
+     gzclose(file2);
+     
+-    delete out2; delete header2;
++    delete []out2; delete []header2;
+ }
+ 
+ void gzWriteSegment(string filestr,short* data,char* header,int m,int n,int o,int p){
+@@ -232,7 +232,7 @@ void gzWriteSegment(string filestr,short* data,char* header,int m,int n,int o,in
+     copy(header,header+352,header2);
+     int dim=o>1?3:2;
+     if(p>1){ dim=4;}
+-    short* dimensions=new short[4];
++    short* dimensions=new short[5];
+     dimensions[0]=dim; dimensions[1]=m; dimensions[2]=n;
+     dimensions[3]=o; dimensions[4]=p;
+     char* dimchar=reinterpret_cast<char*>(dimensions);
+@@ -258,7 +258,7 @@ void gzWriteSegment(string filestr,short* data,char* header,int m,int n,int o,in
+     int err=gzwrite(file2,(unsigned char*)out2,size);
+     gzclose(file2);
+     
+-    delete out2; delete header2;
++    delete []out2; delete []header2;
+     
+ }
+ 
+@@ -293,7 +293,7 @@ vector<TypeF> readFile(string filestr){
+         for(int i=0;i<length;i++){
+             invalues.push_back(floatptr[i]);
+         }
+-        delete charptr;
++        delete []charptr;
+     }
+     else{
+         cout<<"readFile error. Did not find "<<filestr<<"\n";
+diff --git a/src/linearBCV.cpp b/src/linearBCV.cpp
+index 64b26c6..5bc8ee5 100644
+--- a/src/linearBCV.cpp
++++ b/src/linearBCV.cpp
+@@ -272,11 +272,11 @@ int main (int argc, char * const argv[]) {
+         
+         timeDataSmooth+=(timeSmooth+timeData+timeMIND+timeTrans);
+         
+-        delete costall; delete costall2;
++        delete []costall; delete []costall2;
+ 		
+ 	}
+-    delete im1_mind;
+-    delete im1b_mind;
++    delete []im1_mind;
++    delete []im1b_mind;
+ 	//==========================================================================================
+ 	//==========================================================================================
+ 	
+diff --git a/src/primsMST.h b/src/primsMST.h
+index 453df81..971da1d 100644
+--- a/src/primsMST.h
++++ b/src/primsMST.h
+@@ -211,12 +211,12 @@ void primsGraph(float* im1,int* ordered,int* parents,float* edgemst,int step1,in
+     }
+ 	priority.clear();
+ 	
+-	delete edgecost;
+-	delete index_neighbours;
+-	delete levelcount;
+-	delete leveloffset;
+-	delete vertices;
+-	delete level;
++	delete []edgecost;
++	delete []index_neighbours;
++	delete []levelcount;
++	delete []leveloffset;
++	delete []vertices;
++	delete []level;
+ 	
+ 	
+ 	
+diff --git a/src/regularisation.h b/src/regularisation.h
+index 9446bc0..578aed8 100644
+--- a/src/regularisation.h
++++ b/src/regularisation.h
+@@ -166,7 +166,7 @@ void regularisationCL(float* costall,float* u0,float* v0,float* w0,float* u1,flo
+     for(int i=1;i<maxlev;i++){ //cumulative sum
+         startlev[i]=startlev[i-1]+numlev[i];
+     }
+-    delete levels;
++    delete []levels;
+     
+ 	int xs1,ys1,zs1,xx,yy,zz,xx2,yy2,zz2;
+ 
+@@ -294,11 +294,11 @@ void regularisationCL(float* costall,float* u0,float* v0,float* w0,float* u1,flo
+ 
+ 	//cout<<"Deformation field calculated!\n";
+ 
+-	delete cost1;
+-	delete vals;
+-	delete inds;
+-	delete allinds;
+-	delete selected;
++	delete []cost1;
++	delete []vals;
++	delete []inds;
++	delete []allinds;
++	delete []selected;
+ 	
+ }
+ 
+diff --git a/src/transformations.h b/src/transformations.h
+index dc332b6..29fba42 100644
+--- a/src/transformations.h
++++ b/src/transformations.h
+@@ -74,8 +74,8 @@ void volfilter(float* imagein,int m,int n,int o,int length,float sigma){
+ 	filter1(imagein,image1,m,n,o,filter,length,2);
+ 	filter1(image1,imagein,m,n,o,filter,length,3);
+ 	
+-	delete image1;
+-	delete filter;	
++	delete []image1;
++	delete []filter;	
+ 	
+ }
+ 
+@@ -237,8 +237,8 @@ void consistentMappingCL(float* u,float* v,float* w,float* u2,float* v2,float* w
+     }
+     
+     
+-    delete us; delete vs; delete ws;
+-    delete us2; delete vs2; delete ws2;
++    delete []us; delete []vs; delete []ws;
++    delete []us2; delete []vs2; delete []ws2;
+ }
+ 
+ 
