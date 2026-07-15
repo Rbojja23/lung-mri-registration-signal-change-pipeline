@@ -135,6 +135,57 @@ The local manifest records role-confirmation status, safe geometry, streamed
 source/output checksums, and post-write verification. It contains no arbitrary
 NIfTI metadata. No registration binary is run by this preparation command.
 
+## Shared-crop registration preparation
+
+The first cropped experiment uses the fixed image's validated half-open lung
+bbox for both fixed and moving images. It never computes an independent moving
+bbox: that could select different voxel regions and invalidate the controlled
+comparison. Fixed and moving full-volume inputs must already share the exact
+size, spacing, origin, and direction. The crop converts bbox order from NumPy
+`z,y,x` to SimpleITK `x,y,z` and uses `RegionOfInterest`, without resampling or
+reorientation.
+
+Preview the Case 1 crop without writing files:
+
+```bash
+python src/prepare_shared_registration_crop.py \
+  --fixed outputs/registration/registration_case_1/full/preprocessed/fixed.nii.gz \
+  --moving outputs/registration/registration_case_1/full/preprocessed/moving.nii.gz \
+  --bbox-json outputs/bbox/registration_case_1_fixed/bbox.json \
+  --case-id registration_case_1 \
+  --source-experiment full \
+  --experiment cropped \
+  --role-assignment-source inferred-from-repeated-bimg1 \
+  --dry-run
+```
+
+Remove `--dry-run` to create:
+
+```text
+outputs/registration/registration_case_1/cropped/preprocessed/
+    fixed.nii.gz
+    moving.nii.gz
+    preprocessing_manifest.json
+    shared_crop_manifest.json
+```
+
+Boundary-touch flags are informational. When a bbox reaches an image edge,
+requested anatomical padding may have been clipped; this does not change the
+shared-crop rule. Existing products require `--overwrite`, which replaces only
+the four cropped preprocessing products and preserves the full experiment.
+
+After preparation, preview the existing registration runner without executing
+registration:
+
+```bash
+python src/run_deedsbcv_registration.py \
+  --prepared-dir outputs/registration/registration_case_1/cropped/preprocessed \
+  --case-id registration_case_1 \
+  --experiment cropped \
+  --bin-dir third_party/deedsBCV/build-arm64 \
+  --dry-run
+```
+
 ## Default deedsBCV registration
 
 Registration requires a completed `preprocessed/` directory from the input
