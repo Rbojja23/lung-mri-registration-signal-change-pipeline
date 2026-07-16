@@ -186,6 +186,55 @@ python src/run_deedsbcv_registration.py \
   --dry-run
 ```
 
+## Registration QC and experiment comparison
+
+Registration QC compares the fixed image with the original moving image and
+then with the registered moving image. It reports 3D MSE and MAE (lower is
+better), global normalized cross-correlation and deterministic histogram-based
+mutual information (higher is generally better), runtime, represented volume,
+and the final deedsBCV SSD diagnostic when it can be parsed. These intensity
+metrics do not prove anatomical correctness. A validated memory-efficient 3D
+structural-similarity implementation is not provided, so SSIM is deliberately
+omitted instead of averaging unrelated 2D scores.
+
+Optional aligned binary masks enable fixed-mask and intersection-domain
+metrics. Dice is reported only when corresponding anatomical masks are
+provided; it cannot be inferred from intensity images.
+
+Evaluate an existing experiment without rerunning registration:
+
+```bash
+python src/evaluate_registration.py \
+  --case-id registration_case_1 \
+  --experiment full \
+  --experiment-dir outputs/registration/registration_case_1/full \
+  --fixed outputs/registration/registration_case_1/full/preprocessed/fixed.nii.gz \
+  --moving outputs/registration/registration_case_1/full/preprocessed/moving.nii.gz \
+  --registered outputs/registration/registration_case_1/full/deformable/moving_registered.nii.gz \
+  --registration-manifest outputs/registration/registration_case_1/full/registration_manifest.json
+```
+
+Each experiment receives `qc/registration_qc.json` plus before/after overlays,
+checkerboards, and matched-scale difference images. ITK-SNAP review can be
+requested with `--launch-itksnap`, which opens fixed as the main image and both
+moving images as intensity overlays. Use `--dry-run-launch` to inspect the
+launch plan without opening an application.
+
+Compare completed full and cropped QC manifests with:
+
+```bash
+python src/evaluate_registration.py \
+  --compare \
+  --case-id registration_case_1 \
+  --full-qc outputs/registration/registration_case_1/full/qc/registration_qc.json \
+  --cropped-qc outputs/registration/registration_case_1/cropped/qc/registration_qc.json \
+  --output-dir outputs/registration/registration_case_1/comparison
+```
+
+The comparison reports metric-wise and runtime winners but never declares an
+overall anatomical winner without expert visual review. All outputs remain
+research-only and non-diagnostic.
+
 ## Default deedsBCV registration
 
 Registration requires a completed `preprocessed/` directory from the input
