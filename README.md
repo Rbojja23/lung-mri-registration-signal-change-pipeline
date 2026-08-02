@@ -267,6 +267,36 @@ open -a "ITK-SNAP" --args \
   -s outputs/totalsegmentator/<fixed_case>/lungs/combined_lungs.nii.gz
 ```
 
+## Standalone Registration Metric Analysis
+
+The metric-analysis checkpoint explains an existing registration without
+running or changing registration. It reports before/after MSE, MAE, RMSE, NCC,
+mutual information, and SSD for the whole image and, when an aligned lung mask
+is supplied, for lung-only and outside-lung domains. Each metric includes its
+direction, absolute improvement, and percentage improvement.
+
+The report also summarizes signed and absolute voxelwise errors, compares
+moving and registered intensity distributions, and records the effect expected
+from deedsBCV's trilinear interpolation. MSE emphasizes large errors, MAE
+responds directly to absolute intensity and interpolation changes, RMSE retains
+the original intensity units, NCC measures centered pattern agreement, and MI
+measures statistical dependence. No metric is treated as universally best.
+
+The command writes `registration_metric_report.json`, a metric summary,
+error-distribution plots, and matched-scale grayscale-anatomy error overlays to
+an explicitly selected analysis directory. Preview validation and calculations
+without writing anything using `--dry-run`:
+
+```bash
+python src/analyze_registration_metrics.py \
+  --fixed outputs/registration/<case_id>/<experiment>/preprocessed/fixed.nii.gz \
+  --moving outputs/registration/<case_id>/<experiment>/preprocessed/moving.nii.gz \
+  --registered outputs/registration/<case_id>/<experiment>/deformable/moving_registered.nii.gz \
+  --lung-mask outputs/totalsegmentator/<fixed_case>/lungs/combined_lungs.nii.gz \
+  --output-dir outputs/registration/<case_id>/<experiment>/metric_analysis \
+  --dry-run --json
+```
+
 ## Default deedsBCV registration
 
 Registration requires a completed `preprocessed/` directory from the input
