@@ -297,6 +297,43 @@ python src/analyze_registration_metrics.py \
   --dry-run --json
 ```
 
+## Exploratory Functional-Lung Analysis
+
+The standalone functional-lung checkpoint explores whether spatially coherent
+regional intensity changes exist after registration. Despite its name, it does
+not calculate or claim validated ventilation, physiology, or a clinical
+biomarker. It computes only signed `fixed - registered` and absolute
+`abs(fixed - registered)` intensity change. It does not normalize by fixed
+intensity.
+
+All calculations are restricted to the combined fixed-space lung mask. Supplied
+left/right masks enable semantic regional summaries; if they are omitted, the
+tool creates explicitly labeled geometric physical-x partitions that are not
+semantic segmentations. It reports whole/left/right descriptive statistics,
+axial slice trends, descriptive left-right asymmetry, and the largest
+6-connected positive and negative sign regions without biological
+interpretation.
+
+Outputs include `functional_lung_report.json`, axial/coronal/sagittal overlays,
+a multi-slice panel, slice mean/standard-deviation plots, and lung-only
+histograms. Every overlay uses fixed grayscale anatomy, lung-only color, and a
+shared symmetric scale centered at zero. Respiratory state, moving modality,
+intensity comparability, registration error, and interpolation effects remain
+important unresolved limitations.
+
+Preview the analysis without writing files:
+
+```bash
+python src/analyze_functional_lung.py \
+  --fixed outputs/registration/<case_id>/<experiment>/preprocessed/fixed.nii.gz \
+  --registered outputs/registration/<case_id>/<experiment>/deformable/moving_registered.nii.gz \
+  --lung-mask outputs/totalsegmentator/<fixed_case>/lungs/combined_lungs.nii.gz \
+  --left-lung outputs/totalsegmentator/<fixed_case>/lungs/lung_left.nii.gz \
+  --right-lung outputs/totalsegmentator/<fixed_case>/lungs/lung_right.nii.gz \
+  --output-dir outputs/registration/<case_id>/<experiment>/functional_lung \
+  --dry-run --json
+```
+
 ## Default deedsBCV registration
 
 Registration requires a completed `preprocessed/` directory from the input
