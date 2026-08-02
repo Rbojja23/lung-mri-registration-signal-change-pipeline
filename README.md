@@ -235,6 +235,38 @@ The comparison reports metric-wise and runtime winners but never declares an
 overall anatomical winner without expert visual review. All outputs remain
 research-only and non-diagnostic.
 
+## Preliminary Registered Intensity-Change Mapping
+
+The standalone intensity-change checkpoint generates a **preliminary voxelwise
+registered intensity-change map**, not a validated ventilation biomarker. It
+computes signed `fixed - registered`, absolute `abs(fixed - registered)`, and,
+only with an explicit denominator policy, normalized
+`(fixed - registered) / fixed`. Analytical values are restricted to the fixed
+combined-lung mask and remain NaN outside their valid domains.
+
+Normalized output requires either an explicit absolute fixed-intensity
+threshold or an explicitly selected exploratory lung-intensity percentile.
+No epsilon is added: zero and near-zero denominators can be unstable, and no
+scientifically preferred threshold is currently established. Use
+`--skip-normalized` when only signed and absolute maps are wanted.
+
+Analytical NIfTIs preserve unclipped floating-point values and fixed-image
+geometry. Separate display NIfTIs are finite, zero outside the lung mask, and
+clipped at a documented lung-only display percentile. PNGs retain fixed anatomy
+outside the lungs and show colored overlays only for valid lung voxels.
+deedsBCV's trilinear interpolation may smooth or mix registered intensities.
+
+Moving modality, respiratory state/ordering, and intensity calibration remain
+unconfirmed. These products are research-only and non-diagnostic. They may be
+viewed as ITK-SNAP intensity overlays, for example:
+
+```bash
+open -a "ITK-SNAP" --args \
+  -g outputs/registration/<case_id>/<experiment>/preprocessed/fixed.nii.gz \
+  -o outputs/registration/<case_id>/<experiment>/intensity_change/signed_difference_display.nii.gz \
+  -s outputs/totalsegmentator/<fixed_case>/lungs/combined_lungs.nii.gz
+```
+
 ## Default deedsBCV registration
 
 Registration requires a completed `preprocessed/` directory from the input
