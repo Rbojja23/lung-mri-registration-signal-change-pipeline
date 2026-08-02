@@ -334,6 +334,42 @@ python src/analyze_functional_lung.py \
   --dry-run --json
 ```
 
+## Exploratory Normalized Registered Intensity-Change Map
+
+The final standalone exploratory checkpoint creates an **Exploratory normalized
+registered intensity-change map** using `(fixed - registered) / fixed`. It is
+not a validated ventilation measurement or biomarker and makes no physiological
+claim. Respiratory phase, moving modality, MR intensity calibration, and
+cross-acquisition intensity comparability remain unresolved; registration and
+trilinear interpolation also contribute to the observed values.
+
+Calculation is restricted to the combined fixed-space lung mask and to voxels
+where `abs(fixed) >= threshold`. The command accepts only the explicit absolute
+denominator policy, requires a strictly positive threshold, and never adds an
+epsilon. Outside-lung and invalid-denominator analytical voxels remain NaN.
+
+`normalized_difference.nii.gz` is an unclipped float32 analytical map with fixed
+geometry. `normalized_difference_display.nii.gz` is a separate finite display
+copy, zero outside valid lung voxels and symmetrically clipped around zero.
+Axial, coronal, sagittal, and multi-slice figures use grayscale anatomy with a
+transparent valid-lung overlay and one shared diverging scale.
+
+Preview the Exploratory normalized registered intensity-change map without
+writing files:
+
+```bash
+python src/generate_normalized_intensity_map.py \
+  --fixed outputs/registration/<case_id>/<experiment>/preprocessed/fixed.nii.gz \
+  --registered outputs/registration/<case_id>/<experiment>/deformable/moving_registered.nii.gz \
+  --lung-mask outputs/totalsegmentator/<fixed_case>/lungs/combined_lungs.nii.gz \
+  --left-lung outputs/totalsegmentator/<fixed_case>/lungs/lung_left.nii.gz \
+  --right-lung outputs/totalsegmentator/<fixed_case>/lungs/lung_right.nii.gz \
+  --output-dir outputs/registration/<case_id>/<experiment>/normalized_intensity \
+  --denominator-policy absolute \
+  --denominator-threshold <VALUE_TO_CONFIRM> \
+  --dry-run --json
+```
+
 ## Default deedsBCV registration
 
 Registration requires a completed `preprocessed/` directory from the input
