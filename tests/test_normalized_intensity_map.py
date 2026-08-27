@@ -14,7 +14,8 @@ SRC = Path(__file__).resolve().parents[1] / "src"
 sys.path.insert(0, str(SRC))
 
 import normalized_intensity_map as module  # noqa: E402
-from normalized_intensity_map import TERMINOLOGY, generate_normalized_intensity_map  # noqa: E402
+from generate_normalized_intensity_map import build_parser  # noqa: E402
+from normalized_intensity_map import MACHINE_EPSILON_FLOAT64, TERMINOLOGY, generate_normalized_intensity_map  # noqa: E402
 
 
 DIRECTION = (0.0, -1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0)
@@ -46,7 +47,8 @@ def run(tmp_path, *, dry_run=False, with_sides=True, fixed=None, registered=None
     result = generate_normalized_intensity_map(
         fixed_path=paths["fixed"], registered_path=paths["registered"], lung_mask_path=paths["mask"],
         left_lung_path=paths.get("left"), right_lung_path=paths.get("right"), output_dir=tmp_path / "normalized",
-        denominator_policy="absolute", denominator_threshold=kwargs.pop("denominator_threshold", 1.0), dry_run=dry_run, **kwargs,
+        denominator_policy=kwargs.pop("denominator_policy", "absolute"),
+        denominator_threshold=kwargs.pop("denominator_threshold", 1.0), dry_run=dry_run, **kwargs,
     )
     return result, paths, mask
 
@@ -83,10 +85,131 @@ def test_threshold_must_be_positive_and_finite(tmp_path, threshold):
         generate_normalized_intensity_map(fixed_path=paths["fixed"], registered_path=paths["registered"], lung_mask_path=paths["mask"], output_dir=tmp_path / "out", denominator_policy="absolute", denominator_threshold=threshold, dry_run=True)
 
 
-def test_only_absolute_policy_supported(tmp_path):
+def test_unknown_policy_rejected(tmp_path):
     paths, _ = inputs(tmp_path)
-    with pytest.raises(ValueError, match="Only denominator-policy absolute"):
+    with pytest.raises(ValueError, match="absolute or epsilon"):
         generate_normalized_intensity_map(fixed_path=paths["fixed"], registered_path=paths["registered"], lung_mask_path=paths["mask"], output_dir=tmp_path / "out", denominator_policy="percentile", denominator_threshold=1, dry_run=True)
+
+
+@pytest.mark.parametrize("epsilon", ["machine", "1e-6"])
+def test_cli_accepts_machine_and_explicit_epsilon(epsilon):
+    args = build_parser().parse_args([
+        "--fixed", "fixed.nii.gz", "--registered", "registered.nii.gz",
+        "--lung-mask", "mask.nii.gz", "--output-dir", "epsilon-output",
+        "--denominator-policy", "epsilon", "--epsilon", epsilon,
+    ])
+    assert args.denominator_policy == "epsilon" and args.epsilon == epsilon
+
+
+def test_epsilon_formula_exactly_matches_requested_equation(tmp_path):
+    fixed = np.full((5, 6, 8), 4.0, np.float32)
+    registered = np.full_like(fixed, 1.0)
+    result, _, mask = run(
+        tmp_path, fixed=fixed, registered=registered, denominator_policy="epsilon",
+        denominator_threshold=None, epsilon=0.5,
+    )
+    analytical = nib_array(tmp_path / "normalized/normalized_difference.nii.gz")
+    assert analytical[mask] == pytest.approx((4.0 - 1.0) / (4.0 + 0.5))
+    assert result["formula"]["expression"] == "(fixed - registered) / (fixed + epsilon)"
+    assert result["denominator_policy"]["threshold_exclusion_performed"] is False
+
+
+def test_machine_epsilon_and_zero_fixed_denominator_are_finite(tmp_path):
+    fixed = np.full((5, 6, 8), 2.0, np.float32); fixed[2, 2, 2] = 0
+    registered = fixed.copy(); registered[2, 2, 2] = -1
+    result, _, mask = run(
+        tmp_path, fixed=fixed, registered=registered, denominator_policy="epsilon",
+        denominator_threshold=None, epsilon="machine",
+    )
+    analytical = nib_array(tmp_path / "normalized/normalized_difference.nii.gz")
+    assert result["denominator_policy"]["epsilon_source"] == "machine"
+    assert result["denominator_policy"]["epsilon"] == MACHINE_EPSILON_FLOAT64 == 2.220446049250313e-16
+    assert analytical[2, 2, 2] == pytest.approx(1.0 / MACHINE_EPSILON_FLOAT64)
+    assert np.isfinite(analytical[mask]).all()
+    assert result["fixed_lung_intensity"]["exact_zero_voxel_count"] == 1
+
+
+def test_explicit_epsilon_small_denominators_and_negative_fixed_values(tmp_path):
+    fixed = np.full((5, 6, 8), 2.0, np.float64)
+    registered = fixed.copy()
+    fixed[2, 2, 2] = 1e-12; registered[2, 2, 2] = 0
+    fixed[2, 2, 3] = -2; registered[2, 2, 3] = -1
+    result, _, _ = run(
+        tmp_path, fixed=fixed, registered=registered, denominator_policy="epsilon",
+        denominator_threshold=None, epsilon=1e-6,
+    )
+    analytical = nib_array(tmp_path / "normalized/normalized_difference.nii.gz")
+    assert analytical[2, 2, 2] == pytest.approx(1e-12 / (1e-12 + 1e-6))
+    assert analytical[2, 2, 3] == pytest.approx((-2 - -1) / (-2 + 1e-6))
+    assert result["denominator_policy"]["epsilon_source"] == "explicit"
+    assert result["fixed_lung_intensity"]["negative_voxel_count"] == 1
+    assert any("asymmetric" in warning for warning in result["warnings"])
+
+
+@pytest.mark.parametrize("epsilon", [0, -1, float("nan"), float("inf"), "not-a-number", None])
+def test_epsilon_must_be_positive_and_finite(tmp_path, epsilon):
+    paths, _ = inputs(tmp_path)
+    with pytest.raises(ValueError, match="Epsilon must"):
+        generate_normalized_intensity_map(
+            fixed_path=paths["fixed"], registered_path=paths["registered"], lung_mask_path=paths["mask"],
+            output_dir=tmp_path / "out", denominator_policy="epsilon", epsilon=epsilon, dry_run=True,
+        )
+
+
+def test_epsilon_rejects_exact_cancellation_for_negative_fixed_value(tmp_path):
+    fixed = np.full((5, 6, 8), 2.0, np.float64); fixed[2, 2, 2] = -0.5
+    with pytest.raises(ValueError, match=r"F \+ epsilon is exactly zero"):
+        run(
+            tmp_path, fixed=fixed, denominator_policy="epsilon",
+            denominator_threshold=None, epsilon=0.5, dry_run=True,
+        )
+
+
+def test_epsilon_outputs_nan_outside_lung_and_finite_display(tmp_path):
+    result, _, mask = run(
+        tmp_path, denominator_policy="epsilon", denominator_threshold=None, epsilon=1e-6,
+    )
+    analytical = nib_array(tmp_path / "normalized/normalized_difference.nii.gz")
+    display = nib_array(tmp_path / "normalized/normalized_difference_display.nii.gz")
+    assert np.isnan(analytical[~mask]).all()
+    assert np.isfinite(display).all() and np.all(display[~mask] == 0)
+    assert result["denominator_policy"]["valid_voxel_count"] == int(np.count_nonzero(mask))
+
+
+def test_epsilon_left_right_statistics_geometry_and_report(tmp_path):
+    fixed = np.full((5, 6, 8), 10.0, np.float32); registered = fixed.copy()
+    registered[:, :, :4] = 5; registered[:, :, 4:] = 12
+    result, paths, _ = run(
+        tmp_path, fixed=fixed, registered=registered, denominator_policy="epsilon",
+        denominator_threshold=None, epsilon=1.0,
+    )
+    assert result["statistics"]["right_lung"]["mean"] == pytest.approx(5 / 11)
+    assert result["statistics"]["left_lung"]["mean"] == pytest.approx(-2 / 11)
+    output = sitk.ReadImage(str(tmp_path / "normalized/normalized_difference.nii.gz"))
+    source = sitk.ReadImage(str(paths["fixed"]))
+    assert (output.GetSize(), output.GetSpacing(), output.GetOrigin(), output.GetDirection()) == (source.GetSize(), source.GetSpacing(), source.GetOrigin(), source.GetDirection())
+    assert nib.load(str(tmp_path / "normalized/normalized_difference.nii.gz")).get_data_dtype() == np.dtype(np.float32)
+    assert result["denominator_policy"]["computation_dtype"] == "float64"
+
+
+def test_epsilon_dry_run_privacy_and_no_registration_subprocess(tmp_path, monkeypatch):
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: pytest.fail("subprocess executed"))
+    result, _, _ = run(
+        tmp_path, dry_run=True, denominator_policy="epsilon", denominator_threshold=None, epsilon="machine",
+    )
+    assert result["writes_performed"] is False and not (tmp_path / "normalized").exists()
+    serialized = json.dumps(result).lower()
+    assert str(tmp_path).lower() not in serialized and "patient" not in serialized
+
+
+def test_epsilon_overwrite_protection(tmp_path):
+    _, paths, _ = run(tmp_path, denominator_policy="epsilon", denominator_threshold=None, epsilon=1e-6)
+    with pytest.raises(FileExistsError):
+        generate_normalized_intensity_map(
+            fixed_path=paths["fixed"], registered_path=paths["registered"], lung_mask_path=paths["mask"],
+            left_lung_path=paths["left"], right_lung_path=paths["right"], output_dir=tmp_path / "normalized",
+            denominator_policy="epsilon", epsilon=1e-6,
+        )
 
 
 def test_invalid_denominators_and_outside_lung_are_nan(tmp_path):

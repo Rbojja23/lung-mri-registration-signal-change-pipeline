@@ -33,6 +33,8 @@ OUTPUT_NAMES = {
     "multi_slice": "normalized_multi_slice.png",
     "report": "normalized_intensity_report.json",
 }
+MACHINE_EPSILON_FLOAT64 = float(np.finfo(np.float64).eps)
+NEAR_ZERO_THRESHOLDS = (1e-12, 1e-9, 1e-6)
 
 
 def generate_normalized_intensity_map(
@@ -42,7 +44,8 @@ def generate_normalized_intensity_map(
     lung_mask_path: str | Path,
     output_dir: str | Path,
     denominator_policy: str,
-    denominator_threshold: float,
+    denominator_threshold: float | None = None,
+    epsilon: str | float | None = None,
     left_lung_path: str | Path | None = None,
     right_lung_path: str | Path | None = None,
     display_percentile: float = 99.0,
@@ -51,7 +54,9 @@ def generate_normalized_intensity_map(
     dry_run: bool = False,
 ) -> dict[str, Any]:
     """Generate an Exploratory normalized registered intensity-change map."""
-    _validate_options(denominator_policy, denominator_threshold, display_percentile, overlay_opacity)
+    epsilon_value, epsilon_source = _validate_options(
+        denominator_policy, denominator_threshold, epsilon, display_percentile, overlay_opacity
+    )
     fixed_file, fixed = _read_scalar(fixed_path, "fixed")
     registered_file, registered = _read_scalar(registered_path, "registered")
     _require_same_geometry(fixed, registered, "Fixed/registered")
@@ -74,10 +79,24 @@ def generate_normalized_intensity_map(
 
     fixed_array = sitk.GetArrayFromImage(fixed).astype(np.float64, copy=False)
     registered_array = sitk.GetArrayFromImage(registered).astype(np.float64, copy=False)
-    valid = combined & (np.abs(fixed_array) >= float(denominator_threshold))
-    invalid_denominator = combined & ~valid
+    if denominator_policy == "absolute":
+        valid = combined & (np.abs(fixed_array) >= float(denominator_threshold))
+        invalid_denominator = combined & ~valid
+        denominator = fixed_array
+    else:
+        valid = combined.copy()
+        invalid_denominator = np.zeros(combined.shape, dtype=bool)
+        denominator = fixed_array + epsilon_value
+        if np.any(combined & (denominator == 0)):
+            raise ValueError(
+                "F + epsilon is exactly zero for at least one lung voxel; the requested formula is undefined "
+                "there (this can occur when a negative fixed intensity equals -epsilon)."
+            )
     analytical = np.full(fixed_array.shape, np.nan, dtype=np.float32)
-    analytical[valid] = ((fixed_array[valid] - registered_array[valid]) / fixed_array[valid]).astype(np.float32)
+    calculated = (fixed_array[valid] - registered_array[valid]) / denominator[valid]
+    if not np.isfinite(calculated).all() or np.any(np.abs(calculated) > np.finfo(np.float32).max):
+        raise ValueError("The normalized result is not finite and representable as the required float32 analytical map.")
+    analytical[valid] = calculated.astype(np.float32)
 
     regions = {"whole_lung": combined, "left_lung": left, "right_lung": right}
     statistics = {name: _statistics(analytical, mask, valid, invalid_denominator) for name, mask in regions.items()}
@@ -94,6 +113,55 @@ def generate_normalized_intensity_map(
     if not dry_run and any(path.exists() for path in paths.values()) and not overwrite:
         raise FileExistsError("Normalized intensity-map outputs already exist; use --overwrite.")
 
+    fixed_lung = fixed_array[combined]
+    fixed_intensity_summary = {
+        "minimum": float(np.min(fixed_lung)),
+        "maximum": float(np.max(fixed_lung)),
+        "exact_zero_voxel_count": int(np.count_nonzero(fixed_lung == 0)),
+        "near_zero_absolute_threshold_counts": {
+            str(threshold): int(np.count_nonzero(np.abs(fixed_lung) <= threshold))
+            for threshold in NEAR_ZERO_THRESHOLDS
+        },
+        "near_zero_definition": "abs(fixed) <= threshold; descriptive only and never used for exclusion in epsilon mode",
+        "negative_voxel_count": int(np.count_nonzero(fixed_lung < 0)),
+    }
+    if denominator_policy == "absolute":
+        formula = {
+            "expression": "(fixed - registered) / fixed",
+            "valid_domain": "combined fixed-space lung mask and abs(fixed) >= denominator threshold",
+            "normalization_epsilon": None,
+            "resampling_performed": False,
+            "interpolation_performed_by_this_checkpoint": False,
+        }
+        denominator_report = {
+            "policy": "absolute",
+            "threshold": float(denominator_threshold),
+            "threshold_must_be_positive": True,
+            "valid_voxel_count": int(np.count_nonzero(valid)),
+            "invalid_denominator_count": int(np.count_nonzero(invalid_denominator)),
+            "outside_lung_voxel_count": int(combined.size - np.count_nonzero(combined)),
+        }
+    else:
+        formula = {
+            "expression": "(fixed - registered) / (fixed + epsilon)",
+            "valid_domain": "combined fixed-space lung mask; no threshold-based voxel exclusion",
+            "normalization_epsilon": epsilon_value,
+            "resampling_performed": False,
+            "interpolation_performed_by_this_checkpoint": False,
+        }
+        denominator_report = {
+            "policy": "epsilon",
+            "epsilon_source": epsilon_source,
+            "epsilon": epsilon_value,
+            "computation_dtype": "float64",
+            "threshold": None,
+            "threshold_exclusion_performed": False,
+            "valid_voxel_count": int(np.count_nonzero(valid)),
+            "invalid_denominator_count": 0,
+            "outside_lung_voxel_count": int(combined.size - np.count_nonzero(combined)),
+            "exact_zero_stabilized_denominator_count": 0,
+        }
+
     report = {
         "pipeline_version": PIPELINE_VERSION,
         "analysis_type": TERMINOLOGY,
@@ -105,21 +173,9 @@ def generate_normalized_intensity_map(
             "right_lung_mask": display_path(right_file) if right_file else None,
         },
         "geometry_validation": {"passed": True, **_geometry(fixed)},
-        "formula": {
-            "expression": "(fixed - registered) / fixed",
-            "valid_domain": "combined fixed-space lung mask and abs(fixed) >= denominator threshold",
-            "normalization_epsilon": None,
-            "resampling_performed": False,
-            "interpolation_performed_by_this_checkpoint": False,
-        },
-        "denominator_policy": {
-            "policy": "absolute",
-            "threshold": float(denominator_threshold),
-            "threshold_must_be_positive": True,
-            "valid_voxel_count": int(np.count_nonzero(valid)),
-            "invalid_denominator_count": int(np.count_nonzero(invalid_denominator)),
-            "outside_lung_voxel_count": int(combined.size - np.count_nonzero(combined)),
-        },
+        "formula": formula,
+        "denominator_policy": denominator_report,
+        "fixed_lung_intensity": fixed_intensity_summary,
         "left_right_partition_source": partition_source,
         "statistics": statistics,
         "display_scaling": {
@@ -137,8 +193,8 @@ def generate_normalized_intensity_map(
             "terminology": TERMINOLOGY,
             "exploratory": "The ratio is an exploratory registered intensity-change calculation.",
             "not_ventilation": "It is NOT a validated ventilation measurement or biomarker.",
-            "positive_values": "A positive value means fixed intensity exceeds registered intensity relative to the fixed intensity denominator.",
-            "negative_values": "A negative value means registered intensity exceeds fixed intensity relative to the fixed intensity denominator.",
+            "positive_values": "A positive value means the executed numerator and selected denominator have the same sign.",
+            "negative_values": "A negative value means the executed numerator and selected denominator have opposite signs.",
             "physiology": "No physiological interpretation is assigned.",
         },
         "warnings": [
@@ -147,7 +203,10 @@ def generate_normalized_intensity_map(
             "Moving-image modality is unknown.",
             "MR intensity calibration and cross-acquisition comparability are unknown.",
             "Registration and its trilinear interpolation contribute to the registered intensities.",
-            "Near-threshold denominators can amplify noise and registration differences.",
+            "Near-threshold denominators can amplify noise and registration differences." if denominator_policy == "absolute" else None,
+            "Machine epsilon protects an exact zero fixed intensity numerically but does not meaningfully stabilize genuinely small denominators." if denominator_policy == "epsilon" and epsilon_source == "machine" else None,
+            "An explicit epsilon is a user-selected sensitivity-analysis value, not a medically validated stabilization constant." if denominator_policy == "epsilon" and epsilon_source == "explicit" else None,
+            "The requested fixed + epsilon denominator is asymmetric around zero; positive epsilon shifts negative fixed intensities toward zero and can cancel fixed = -epsilon exactly." if denominator_policy == "epsilon" else None,
             "Derived left/right partitions are geometric, not semantic." if left_file is None else None,
         ],
         "outputs": {name: display_path(path) for name, path in paths.items()},
@@ -173,15 +232,35 @@ def generate_normalized_intensity_map(
     return report
 
 
-def _validate_options(policy, threshold, percentile, opacity):
-    if policy != "absolute":
-        raise ValueError("Only denominator-policy absolute is supported.")
-    if threshold is None or not math.isfinite(float(threshold)) or float(threshold) <= 0:
-        raise ValueError("Denominator threshold must be finite and greater than zero.")
+def _validate_options(policy, threshold, epsilon, percentile, opacity):
+    if policy not in {"absolute", "epsilon"}:
+        raise ValueError("Denominator policy must be absolute or epsilon.")
+    epsilon_value = None
+    epsilon_source = None
+    if policy == "absolute":
+        if threshold is None or not math.isfinite(float(threshold)) or float(threshold) <= 0:
+            raise ValueError("Denominator threshold must be finite and greater than zero.")
+        if epsilon is not None:
+            raise ValueError("--epsilon is only valid with denominator-policy epsilon.")
+    else:
+        if threshold is not None:
+            raise ValueError("--denominator-threshold is only valid with denominator-policy absolute.")
+        if isinstance(epsilon, str) and epsilon.strip().lower() == "machine":
+            epsilon_value = MACHINE_EPSILON_FLOAT64
+            epsilon_source = "machine"
+        else:
+            try:
+                epsilon_value = float(epsilon)
+            except (TypeError, ValueError):
+                raise ValueError("Epsilon must be 'machine' or a finite number greater than zero.") from None
+            epsilon_source = "explicit"
+        if not math.isfinite(epsilon_value) or epsilon_value <= 0:
+            raise ValueError("Epsilon must be finite and greater than zero.")
     if not 0 < float(percentile) <= 100:
         raise ValueError("Display percentile must be in (0, 100].")
     if not 0 <= float(opacity) <= 1:
         raise ValueError("Overlay opacity must be in [0, 1].")
+    return epsilon_value, epsilon_source
 
 
 def _read_scalar(path, role):

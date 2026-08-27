@@ -240,14 +240,14 @@ research-only and non-diagnostic.
 The standalone intensity-change checkpoint generates a **preliminary voxelwise
 registered intensity-change map**, not a validated ventilation biomarker. It
 computes signed `fixed - registered`, absolute `abs(fixed - registered)`, and,
-only with an explicit denominator policy, normalized
-`(fixed - registered) / fixed`. Analytical values are restricted to the fixed
-combined-lung mask and remain NaN outside their valid domains.
+only with an explicit denominator policy, a normalized map. Analytical values
+are restricted to the fixed combined-lung mask and remain NaN outside their
+valid domains.
 
-Normalized output requires either an explicit absolute fixed-intensity
-threshold or an explicitly selected exploratory lung-intensity percentile.
-No epsilon is added: zero and near-zero denominators can be unstable, and no
-scientifically preferred threshold is currently established. Use
+The preliminary intensity-change command's normalized option requires either an
+explicit absolute fixed-intensity threshold or an explicitly selected
+exploratory lung-intensity percentile. The separate normalized-map checkpoint
+described below also supports the professor-requested epsilon equation. Use
 `--skip-normalized` when only signed and absolute maps are wanted.
 
 Analytical NIfTIs preserve unclipped floating-point values and fixed-image
@@ -336,17 +336,31 @@ python src/analyze_functional_lung.py \
 
 ## Exploratory Normalized Registered Intensity-Change Map
 
-The final standalone exploratory checkpoint creates an **Exploratory normalized
-registered intensity-change map** using `(fixed - registered) / fixed`. It is
-not a validated ventilation measurement or biomarker and makes no physiological
-claim. Respiratory phase, moving modality, MR intensity calibration, and
-cross-acquisition intensity comparability remain unresolved; registration and
-trilinear interpolation also contribute to the observed values.
+The standalone exploratory checkpoint creates an **Exploratory normalized
+registered intensity-change map**. It supports the original threshold policy,
+`(fixed - registered) / fixed` where `abs(fixed) >= threshold`, and the
+professor-requested epsilon policy, `(fixed - registered) / (fixed + epsilon)`.
+It is not a validated ventilation measurement or biomarker and makes no
+physiological claim. Respiratory phase, moving modality, MR intensity
+calibration, and cross-acquisition intensity comparability remain unresolved;
+registration and trilinear interpolation also contribute to observed values.
 
-Calculation is restricted to the combined fixed-space lung mask and to voxels
-where `abs(fixed) >= threshold`. The command accepts only the explicit absolute
-denominator policy, requires a strictly positive threshold, and never adds an
-epsilon. Outside-lung and invalid-denominator analytical voxels remain NaN.
+Both policies calculate only in the combined fixed-space lung mask. Absolute
+mode requires a finite, strictly positive threshold and leaves excluded
+denominators as NaN. Epsilon mode performs no threshold-based exclusion and
+requires either `--epsilon machine` or an explicit finite, strictly positive
+number. It uses float64 computation; `machine` means exactly
+`2.220446049250313e-16`, NumPy's float64 machine epsilon near 1. This protects
+an exact zero denominator numerically, but does not meaningfully stabilize
+genuinely small intensities or establish a scientifically preferred value.
+Larger explicit values are supported for sensitivity analysis and are never
+selected automatically.
+
+The requested `fixed + epsilon` equation is preserved exactly. A positive
+epsilon is asymmetric around zero: it moves negative fixed intensities toward
+zero and is undefined if `fixed == -epsilon`. The report records negative,
+exact-zero, and descriptively near-zero fixed-lung voxel counts so this
+limitation is visible. No interpolation or resampling is performed here.
 
 `normalized_difference.nii.gz` is an unclipped float32 analytical map with fixed
 geometry. `normalized_difference_display.nii.gz` is a separate finite display
@@ -355,7 +369,7 @@ Axial, coronal, sagittal, and multi-slice figures use grayscale anatomy with a
 transparent valid-lung overlay and one shared diverging scale.
 
 Preview the Exploratory normalized registered intensity-change map without
-writing files:
+writing files in the backward-compatible absolute-threshold mode:
 
 ```bash
 python src/generate_normalized_intensity_map.py \
@@ -369,6 +383,29 @@ python src/generate_normalized_intensity_map.py \
   --denominator-threshold <VALUE_TO_CONFIRM> \
   --dry-run --json
 ```
+
+Preview the epsilon mode in a separate directory so threshold-based products
+are not overwritten:
+
+```bash
+python src/generate_normalized_intensity_map.py \
+  --fixed outputs/registration/<case_id>/<experiment>/preprocessed/fixed.nii.gz \
+  --registered outputs/registration/<case_id>/<experiment>/deformable/moving_registered.nii.gz \
+  --lung-mask outputs/totalsegmentator/<fixed_case>/lungs/combined_lungs.nii.gz \
+  --left-lung outputs/totalsegmentator/<fixed_case>/lungs/lung_left.nii.gz \
+  --right-lung outputs/totalsegmentator/<fixed_case>/lungs/lung_right.nii.gz \
+  --output-dir outputs/registration/<case_id>/<experiment>/normalized_intensity_epsilon \
+  --denominator-policy epsilon \
+  --epsilon machine \
+  --dry-run --json
+```
+
+The analytical NIfTI is float32, unclipped, fixed-geometry, and NaN outside its
+lung-domain calculation. The separate display NIfTI is finite, zero outside the
+lung, and symmetrically clipped only for visualization. Output replacement
+still requires `--overwrite`; choosing the dedicated epsilon directory keeps
+the original threshold products intact by default. All outputs are
+research-only and non-diagnostic.
 
 ## Default deedsBCV registration
 

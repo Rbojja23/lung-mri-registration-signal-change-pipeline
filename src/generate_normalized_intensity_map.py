@@ -15,8 +15,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--left-lung")
     parser.add_argument("--right-lung")
     parser.add_argument("--output-dir", required=True)
-    parser.add_argument("--denominator-policy", choices=("absolute",), required=True)
-    parser.add_argument("--denominator-threshold", type=float, required=True)
+    parser.add_argument("--denominator-policy", choices=("absolute", "epsilon"), required=True)
+    parser.add_argument("--denominator-threshold", type=float)
+    parser.add_argument(
+        "--epsilon",
+        help="For epsilon policy: 'machine' uses float64 eps (2.220446049250313e-16), or supply a positive finite number.",
+    )
     parser.add_argument("--display-percentile", type=float, default=99.0)
     parser.add_argument("--overlay-opacity", type=float, default=0.45)
     parser.add_argument("--dry-run", action="store_true")
@@ -31,7 +35,8 @@ def main(argv: list[str] | None = None) -> int:
         fixed_path=args.fixed, registered_path=args.registered, lung_mask_path=args.lung_mask,
         left_lung_path=args.left_lung, right_lung_path=args.right_lung,
         output_dir=args.output_dir, denominator_policy=args.denominator_policy,
-        denominator_threshold=args.denominator_threshold, display_percentile=args.display_percentile,
+        denominator_threshold=args.denominator_threshold, epsilon=args.epsilon,
+        display_percentile=args.display_percentile,
         overlay_opacity=args.overlay_opacity, dry_run=args.dry_run, overwrite=args.overwrite,
     )
     if args.json:
