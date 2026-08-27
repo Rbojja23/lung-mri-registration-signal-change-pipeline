@@ -1,6 +1,18 @@
-# Case 1 registration presentation commands
+# Registration presentation commands
 
 Run these commands from any directory by invoking the script with its absolute path, or from the repository root as shown below. The launcher is read-only: it validates existing artifacts, opens them, and prints JSON; it never computes pipeline results. For rehearsal without GUI windows, prefix a GUI command with `PRESENTATION_DRY_RUN=1`.
+
+Case 1 remains the backward-compatible default. Select Case 2 by inserting
+`--case registration_case_2` before the stage name, for example:
+
+```bash
+./presentation_commands.sh --case registration_case_2 full-registration
+PRESENTATION_DRY_RUN=1 ./presentation_commands.sh --case registration_case_2 normalized-map
+```
+
+All paths passed to ITK-SNAP are resolved from the repository location and are
+therefore absolute. The script reads completed products only; it never runs
+segmentation, registration, QC, or analysis code.
 
 ## Original
 
@@ -90,7 +102,16 @@ Opens orthogonal overlays, the multi-slice panel, slice summaries, and lung hist
 
 Command: `./presentation_commands.sh normalized-map`
 
-If completed outputs exist, displays the normalized map over fixed anatomy, opens every normalized overlay PNG, and prints the report; otherwise it prints the verified unresolved-threshold message. Say aloud: “The normalized implementation exists, but Case 1 was intentionally not generated until a defensible denominator threshold is chosen.” Expected files when available: `normalized_difference_display.nii.gz`, normalized overlay PNGs, `normalized_intensity_report.json`, fixed anatomy, and the lung mask. Caution: near-zero denominators can amplify noise, and no threshold has been scientifically resolved for Case 1.
+If completed outputs exist, displays the machine-epsilon normalized map over
+fixed anatomy, opens every normalized overlay PNG, and prints the report. It
+reads from `full/normalized_intensity_epsilon_machine/`. Say aloud: “This is the
+exploratory registered intensity-change ratio `(fixed - registered) / (fixed +
+epsilon)` using the same float64 machine epsilon in both cases.” Expected files:
+`normalized_difference_display.nii.gz`, normalized overlay PNGs,
+`normalized_intensity_report.json`, fixed anatomy, and the lung mask. Caution:
+machine epsilon provides exact-zero numerical protection but does not
+scientifically stabilize genuinely small denominators; this is not validated
+ventilation.
 
 ## Tests
 

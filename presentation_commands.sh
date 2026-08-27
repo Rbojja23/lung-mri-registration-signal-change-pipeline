@@ -1,14 +1,28 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Read-only presentation launcher for completed registration_case_1 artifacts.
+# Read-only presentation launcher for completed registration-case artifacts.
 # Set PRESENTATION_DRY_RUN=1 to validate and print GUI commands without opening them.
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CASE_DIR="$ROOT_DIR/outputs/registration/registration_case_1"
+CASE_ID="${PRESENTATION_CASE:-registration_case_1}"
+if [[ "${1:-}" == "--case" ]]; then
+  if [[ -z "${2:-}" ]]; then
+    printf '%s\n' 'Error: --case requires a case ID.' >&2
+    exit 2
+  fi
+  CASE_ID="$2"
+  shift 2
+fi
+if [[ ! "$CASE_ID" =~ ^[A-Za-z0-9._-]+$ ]]; then
+  printf 'Error: invalid case ID: %s\n' "$CASE_ID" >&2
+  exit 2
+fi
+CASE_DIR="$ROOT_DIR/outputs/registration/$CASE_ID"
 FULL_DIR="$CASE_DIR/full"
 CROPPED_DIR="$CASE_DIR/cropped"
-FIXED_LABEL_DIR="$ROOT_DIR/outputs/itksnap/registration_case_1_fixed"
-LUNG_MASK="$ROOT_DIR/outputs/totalsegmentator/registration_case_1_fixed/lungs/combined_lungs.nii.gz"
+FIXED_CASE_ID="${CASE_ID}_fixed"
+FIXED_LABEL_DIR="$ROOT_DIR/outputs/itksnap/$FIXED_CASE_ID"
+LUNG_MASK="$ROOT_DIR/outputs/totalsegmentator/$FIXED_CASE_ID/lungs/combined_lungs.nii.gz"
 DRY_RUN="${PRESENTATION_DRY_RUN:-0}"
 
 require_file() {
@@ -159,11 +173,11 @@ stage_functional_lung() {
 }
 
 stage_normalized_map() {
-  local dir="$FULL_DIR/normalized_intensity"
+  local dir="$FULL_DIR/normalized_intensity_epsilon_machine"
   local display="$dir/normalized_difference_display.nii.gz"
   local report="$dir/normalized_intensity_report.json"
   if [[ ! -f "$display" || ! -f "$report" ]]; then
-    printf '%s\n' 'Normalized map implementation exists, but Case 1 outputs have not been generated because the denominator threshold remains unresolved.'
+    printf 'Machine-epsilon normalized-map outputs have not been generated for %s.\n' "$CASE_ID"
     return 0
   fi
   local overlays=("$dir"/normalized_*.png)
@@ -218,31 +232,25 @@ stage_results_summary() {
 }
 
 print_all() {
-  cat <<'EOF'
-Recommended presentation order (run one at a time):
-  ./presentation_commands.sh original
-  ./presentation_commands.sh segmentation
-  ./presentation_commands.sh bbox
-  ./presentation_commands.sh cropped-inputs
-  ./presentation_commands.sh full-registration
-  ./presentation_commands.sh full-registration-qc
-  ./presentation_commands.sh cropped-registration
-  ./presentation_commands.sh cropped-registration-qc
-  ./presentation_commands.sh comparison
-  ./presentation_commands.sh metric-analysis
-  ./presentation_commands.sh signed-difference
-  ./presentation_commands.sh absolute-difference
-  ./presentation_commands.sh intensity-change-figures
-  ./presentation_commands.sh functional-lung
-  ./presentation_commands.sh normalized-map
-  ./presentation_commands.sh results-summary
-  ./presentation_commands.sh tests
-EOF
+  local prefix=(./presentation_commands.sh)
+  if [[ "$CASE_ID" != "registration_case_1" ]]; then
+    prefix+=(--case "$CASE_ID")
+  fi
+  printf 'Recommended presentation order for %s (run one at a time):\n' "$CASE_ID"
+  local stage
+  for stage in original segmentation bbox cropped-inputs full-registration \
+    full-registration-qc cropped-registration cropped-registration-qc comparison \
+    metric-analysis signed-difference absolute-difference intensity-change-figures \
+    functional-lung normalized-map results-summary tests; do
+    printf '  '
+    printf '%q ' "${prefix[@]}"
+    printf '%s\n' "$stage"
+  done
 }
 
 usage() {
   cat <<'EOF'
-Usage: ./presentation_commands.sh STAGE
+Usage: ./presentation_commands.sh [--case CASE_ID] STAGE
 
 Stages:
   original  segmentation  bbox  cropped-inputs
@@ -253,6 +261,7 @@ Stages:
   tests  results-summary  all  help
 
 Set PRESENTATION_DRY_RUN=1 to verify and print GUI commands without launching applications.
+The default case is registration_case_1. PRESENTATION_CASE may also set it.
 EOF
 }
 
