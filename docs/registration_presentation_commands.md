@@ -113,6 +113,18 @@ machine epsilon provides exact-zero numerical protection but does not
 scientifically stabilize genuinely small denominators; this is not validated
 ventilation.
 
+## Case comparison
+
+Command: `./presentation_commands.sh case-comparison`
+
+Opens the existing Case 1-versus-Case 2 runtime, registration-quality,
+intensity-change, functional-lung, and compatible machine-epsilon normalized
+comparison figures, then prints `case_1_vs_case_2.json`. This stage is global;
+`--case` does not change its inputs. The launcher uses absolute paths and never
+recomputes the comparison or any upstream analysis. Caution: the results are
+descriptive, full and cropped metrics use different domains, and no biological,
+clinical, or ventilation winner is assigned.
+
 ## Tests
 
 Command: `./presentation_commands.sh tests`

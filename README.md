@@ -407,6 +407,33 @@ still requires `--overwrite`; choosing the dedicated epsilon directory keeps
 the original threshold products intact by default. All outputs are
 research-only and non-diagnostic.
 
+## Report-Driven Case Comparison
+
+The standalone case comparison consumes completed Case 1 and Case 2 JSON
+reports only. It does not read medical images or rerun segmentation,
+registration, QC, or analysis stages. Before comparing results, it validates
+the deedsBCV build and default-by-omission command strategy, fixed-derived crop
+method and padding, MI bins, metric definitions, display percentiles,
+fixed-space lung masking, and normalized formula and epsilon provenance.
+
+Preview validation and calculations without writing outputs:
+
+```bash
+python src/compare_registration_cases.py \
+  --case-1-dir outputs/registration/registration_case_1 \
+  --case-2-dir outputs/registration/registration_case_2 \
+  --output-dir outputs/registration/case_comparison \
+  --dry-run --json
+```
+
+The real command writes `case_1_vs_case_2.json` plus presentation-ready runtime,
+registration-quality, residual intensity-change, functional-lung, and
+compatible machine-epsilon normalized comparison figures. Full and cropped
+error metrics remain explicitly separated because they cover different spatial
+domains. Lung-only metrics are preferred for descriptive lung-domain review.
+The report sets `overall_case_winner` to null and makes no biological, clinical,
+or ventilation claim. Existing results require `--overwrite` to replace.
+
 ## Default deedsBCV registration
 
 Registration requires a completed `preprocessed/` directory from the input

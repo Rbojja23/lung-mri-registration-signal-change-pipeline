@@ -23,6 +23,7 @@ CROPPED_DIR="$CASE_DIR/cropped"
 FIXED_CASE_ID="${CASE_ID}_fixed"
 FIXED_LABEL_DIR="$ROOT_DIR/outputs/itksnap/$FIXED_CASE_ID"
 LUNG_MASK="$ROOT_DIR/outputs/totalsegmentator/$FIXED_CASE_ID/lungs/combined_lungs.nii.gz"
+CASE_COMPARISON_DIR="$ROOT_DIR/outputs/registration/case_comparison"
 DRY_RUN="${PRESENTATION_DRY_RUN:-0}"
 
 require_file() {
@@ -193,6 +194,20 @@ stage_normalized_map() {
   display_json "$report"
 }
 
+stage_case_comparison() {
+  local figures=(
+    "$CASE_COMPARISON_DIR/registration_runtime_comparison.png"
+    "$CASE_COMPARISON_DIR/registration_quality_comparison.png"
+    "$CASE_COMPARISON_DIR/intensity_change_comparison.png"
+    "$CASE_COMPARISON_DIR/functional_lung_comparison.png"
+  )
+  if [[ -f "$CASE_COMPARISON_DIR/normalized_intensity_comparison.png" ]]; then
+    figures+=("$CASE_COMPARISON_DIR/normalized_intensity_comparison.png")
+  fi
+  open_files "${figures[@]}"
+  display_json "$CASE_COMPARISON_DIR/case_1_vs_case_2.json"
+}
+
 stage_tests() {
   cat <<'EOF'
 Focused test commands (printed only; nothing is run):
@@ -202,6 +217,7 @@ Focused test commands (printed only; nothing is run):
   python -m pytest tests/test_intensity_change_map.py
   python -m pytest tests/test_functional_lung_analysis.py
   python -m pytest tests/test_normalized_intensity_map.py
+  python -m pytest tests/test_case_comparison.py
 EOF
 }
 
@@ -241,7 +257,7 @@ print_all() {
   for stage in original segmentation bbox cropped-inputs full-registration \
     full-registration-qc cropped-registration cropped-registration-qc comparison \
     metric-analysis signed-difference absolute-difference intensity-change-figures \
-    functional-lung normalized-map results-summary tests; do
+    functional-lung normalized-map case-comparison results-summary tests; do
     printf '  '
     printf '%q ' "${prefix[@]}"
     printf '%s\n' "$stage"
@@ -258,7 +274,7 @@ Stages:
   full-registration-qc  cropped-registration-qc  comparison
   metric-analysis  signed-difference  absolute-difference
   intensity-change-figures  functional-lung  normalized-map
-  tests  results-summary  all  help
+  case-comparison  tests  results-summary  all  help
 
 Set PRESENTATION_DRY_RUN=1 to verify and print GUI commands without launching applications.
 The default case is registration_case_1. PRESENTATION_CASE may also set it.
@@ -281,6 +297,7 @@ case "${1:-help}" in
   intensity-change-figures) stage_intensity_change_figures ;;
   functional-lung) stage_functional_lung ;;
   normalized-map) stage_normalized_map ;;
+  case-comparison) stage_case_comparison ;;
   tests) stage_tests ;;
   results-summary) stage_results_summary ;;
   all) print_all ;;
