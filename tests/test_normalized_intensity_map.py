@@ -316,3 +316,28 @@ def test_privacy_safe_and_no_registration_subprocess(tmp_path, monkeypatch):
     serialized = json.dumps(result).lower()
     assert str(tmp_path).lower() not in serialized and "patient" not in serialized
     assert result["formula"]["interpolation_performed_by_this_checkpoint"] is False
+
+
+def test_figures_only_preserves_normalized_nifti_report_and_statistics(tmp_path):
+    result, paths, _ = run(
+        tmp_path,
+        denominator_policy="epsilon",
+        denominator_threshold=None,
+        epsilon="machine",
+    )
+    analytical_path = tmp_path / "normalized/normalized_difference.nii.gz"
+    report_path = tmp_path / "normalized/normalized_intensity_report.json"
+    before_analytical = analytical_path.read_bytes()
+    before_report = report_path.read_bytes()
+
+    regenerated = generate_normalized_intensity_map(
+        fixed_path=paths["fixed"], registered_path=paths["registered"],
+        lung_mask_path=paths["mask"], output_dir=tmp_path / "normalized",
+        denominator_policy="epsilon", epsilon="machine", figures_only=True,
+    )
+
+    assert regenerated["completion_status"] == "figures-only-complete"
+    assert regenerated["statistics"] == result["statistics"]
+    assert regenerated["display_scaling"]["limits"][0] == -regenerated["display_scaling"]["limits"][1]
+    assert analytical_path.read_bytes() == before_analytical
+    assert report_path.read_bytes() == before_report

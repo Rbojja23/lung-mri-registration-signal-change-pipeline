@@ -26,6 +26,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument(
+        "--figures-only",
+        action="store_true",
+        help="Regenerate PNGs from the existing analytical map and report display limits; do not rewrite NIfTI or JSON outputs.",
+    )
     return parser
 
 
@@ -38,6 +43,7 @@ def main(argv: list[str] | None = None) -> int:
         denominator_threshold=args.denominator_threshold, epsilon=args.epsilon,
         display_percentile=args.display_percentile,
         overlay_opacity=args.overlay_opacity, dry_run=args.dry_run, overwrite=args.overwrite,
+        figures_only=args.figures_only,
     )
     if args.json:
         print(json.dumps(result, indent=2))

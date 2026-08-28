@@ -25,6 +25,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--overlay-opacity", type=float, default=0.45)
     parser.add_argument("--histogram-bins", type=int, default=100)
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument(
+        "--figures-only",
+        action="store_true",
+        help="Regenerate PNGs from existing analytical maps and report display limits; do not rewrite NIfTI or JSON outputs.",
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--json", action="store_true")
     return parser
@@ -40,6 +45,7 @@ def main(argv: list[str] | None = None) -> int:
         denominator_percentile=args.denominator_percentile, skip_normalized=args.skip_normalized,
         display_percentile=args.display_percentile, overlay_opacity=args.overlay_opacity,
         histogram_bins=args.histogram_bins, overwrite=args.overwrite, dry_run=args.dry_run,
+        figures_only=args.figures_only,
     )
     if args.json:
         print(json.dumps(result, indent=2))

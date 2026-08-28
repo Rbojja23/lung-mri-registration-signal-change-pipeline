@@ -127,6 +127,9 @@ def test_skip_normalized_display_is_finite_zero_outside_and_analytical_unclipped
     assert np.isfinite(display).all() and np.all(display[~mask] == 0)
     scale = result["display_scaling"]["signed"]
     assert scale["display_min"] == -scale["display_max"]
+    absolute_scale = result["display_scaling"]["absolute"]
+    assert absolute_scale["display_min"] == 0
+    assert absolute_scale["display_max"] > absolute_scale["display_min"]
     assert np.max(display) <= scale["display_max"]
     assert "normalized_analytical" not in result["outputs"]
 
@@ -216,3 +219,26 @@ def test_no_registration_subprocess(tmp_path, monkeypatch):
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: pytest.fail("subprocess called"))
     result, _ = run(tmp_path, dry_run=True)
     assert result["completion_status"] == "dry-run"
+
+
+def test_figures_only_preserves_analytical_niftis_and_manifest_statistics(tmp_path):
+    result, paths = run(tmp_path, registered=np.full((5, 6, 7), 8.0, np.float32))
+    analytical_paths = [
+        generated(tmp_path, "signed_difference.nii.gz"),
+        generated(tmp_path, "absolute_difference.nii.gz"),
+    ]
+    before_niftis = {path: path.read_bytes() for path in analytical_paths}
+    manifest_path = generated(tmp_path, "intensity_change_manifest.json")
+    before_manifest = manifest_path.read_bytes()
+    before_statistics = result["statistics"]
+
+    regenerated = generate_intensity_change_map(
+        fixed_path=paths[0], registered_path=paths[1], lung_mask_path=paths[2],
+        case_id="synthetic", output_root=tmp_path / "outputs", skip_normalized=True,
+        figures_only=True,
+    )
+
+    assert regenerated["completion_status"] == "figures-only-complete"
+    assert regenerated["statistics"] == before_statistics
+    assert manifest_path.read_bytes() == before_manifest
+    assert {path: path.read_bytes() for path in analytical_paths} == before_niftis

@@ -19,6 +19,7 @@ import nibabel as nib
 import numpy as np
 import SimpleITK as sitk
 
+from lung_slice_selection import select_lung_visualization_slices
 from project_paths import display_path
 from version import PIPELINE_VERSION
 
@@ -52,11 +53,21 @@ def generate_normalized_intensity_map(
     overlay_opacity: float = 0.45,
     overwrite: bool = False,
     dry_run: bool = False,
+    figures_only: bool = False,
 ) -> dict[str, Any]:
     """Generate an Exploratory normalized registered intensity-change map."""
     epsilon_value, epsilon_source = _validate_options(
         denominator_policy, denominator_threshold, epsilon, display_percentile, overlay_opacity
     )
+    destination = Path(output_dir).expanduser().resolve(strict=False)
+    paths = {name: destination / filename for name, filename in OUTPUT_NAMES.items()}
+    if figures_only:
+        return _regenerate_figures_only(
+            fixed_path=fixed_path,
+            lung_mask_path=lung_mask_path,
+            paths=paths,
+            dry_run=dry_run,
+        )
     fixed_file, fixed = _read_scalar(fixed_path, "fixed")
     registered_file, registered = _read_scalar(registered_path, "registered")
     _require_same_geometry(fixed, registered, "Fixed/registered")
@@ -108,8 +119,6 @@ def generate_normalized_intensity_map(
     clipped = valid & ((analytical < -display_limit) | (analytical > display_limit))
     selected = _selected_slices(combined)
 
-    destination = Path(output_dir).expanduser().resolve(strict=False)
-    paths = {name: destination / filename for name, filename in OUTPUT_NAMES.items()}
     if not dry_run and any(path.exists() for path in paths.values()) and not overwrite:
         raise FileExistsError("Normalized intensity-map outputs already exist; use --overwrite.")
 
@@ -223,9 +232,10 @@ def generate_normalized_intensity_map(
     _write_float_nifti(paths["analytical"], analytical, fixed)
     _write_float_nifti(paths["display"], display, fixed)
     anatomy = _anatomy_limits(fixed_array)
+    title = _normalization_title(denominator_policy)
     for plane in ("axial", "coronal", "sagittal"):
-        _render_plane(fixed_array, analytical, valid, fixed.GetSpacing(), selected, plane, display_limit, overlay_opacity, anatomy, paths[plane])
-    _render_multi_slice(fixed_array, analytical, valid, fixed.GetSpacing(), selected["axial_panel_z"], display_limit, overlay_opacity, anatomy, paths["multi_slice"])
+        _render_plane(fixed_array, analytical, valid, combined, fixed.GetSpacing(), selected, plane, display_limit, overlay_opacity, anatomy, paths[plane], title)
+    _render_multi_slice(fixed_array, analytical, valid, combined, fixed.GetSpacing(), selected["axial_panel_z"], display_limit, overlay_opacity, anatomy, paths["multi_slice"], title)
     report["completion_status"] = "complete"
     report["writes_performed"] = True
     paths["report"].write_text(json.dumps(report, indent=2) + "\n")
@@ -337,10 +347,54 @@ def _statistics(analytical, region, valid, invalid):
 
 
 def _selected_slices(mask):
-    coords = np.argwhere(mask); lower, upper = coords.min(axis=0), coords.max(axis=0)
-    center = np.rint((lower + upper) / 2).astype(int)
-    panel = np.rint(np.linspace(lower[0], upper[0], 7)).astype(int)
-    return {"central": {"axial_z": int(center[0]), "coronal_y": int(center[1]), "sagittal_x": int(center[2])}, "axial_panel_z": [int(value) for value in panel]}
+    return select_lung_visualization_slices(mask, axial_panel_count=7)
+
+
+def _regenerate_figures_only(*, fixed_path, lung_mask_path, paths, dry_run):
+    """Regenerate normalized PNGs while leaving analytical and report files untouched."""
+    if not paths["report"].is_file():
+        raise FileNotFoundError("Figures-only mode requires an existing normalized intensity report.")
+    report = json.loads(paths["report"].read_text())
+    if report.get("completion_status") != "complete":
+        raise ValueError("Figures-only mode requires a complete normalized intensity report.")
+
+    _, fixed = _read_scalar(fixed_path, "fixed")
+    _, combined = _read_mask(lung_mask_path, fixed, "combined lung")
+    analytical = _read_existing_analytical(paths["analytical"], fixed)
+    valid = combined & np.isfinite(analytical)
+    limits = report["display_scaling"]["limits"]
+    if len(limits) != 2 or float(limits[0]) >= 0 or float(limits[1]) <= 0 or not np.isclose(float(limits[0]), -float(limits[1])):
+        raise ValueError("Existing normalized display limits are not symmetric around zero.")
+    limit = float(limits[1])
+    opacity = float(report["display_scaling"]["overlay_opacity"])
+    selected = _selected_slices(combined)
+    result = dict(report)
+    result["selected_slices"] = selected
+    result["completion_status"] = "figures-only-dry-run" if dry_run else "figures-only-complete"
+    result["writes_performed"] = not dry_run
+    if dry_run:
+        return result
+
+    fixed_array = sitk.GetArrayFromImage(fixed).astype(np.float64, copy=False)
+    anatomy = _anatomy_limits(fixed_array)
+    policy = report["denominator_policy"]["policy"]
+    title = _normalization_title(policy)
+    for plane in ("axial", "coronal", "sagittal"):
+        _render_plane(fixed_array, analytical, valid, combined, fixed.GetSpacing(), selected, plane, limit, opacity, anatomy, paths[plane], title)
+    _render_multi_slice(fixed_array, analytical, valid, combined, fixed.GetSpacing(), selected["axial_panel_z"], limit, opacity, anatomy, paths["multi_slice"], title)
+    return result
+
+
+def _read_existing_analytical(path, reference):
+    if not path.is_file():
+        raise FileNotFoundError(f"Figures-only mode requires the existing analytical NIfTI: {path}")
+    image = sitk.ReadImage(str(path))
+    _require_same_geometry(reference, image, "Fixed/normalized analytical map")
+    data_xyz = np.asanyarray(nib.load(str(path)).dataobj).astype(np.float32, copy=False)
+    data_zyx = np.transpose(data_xyz, (2, 1, 0))
+    if data_zyx.shape != tuple(reversed(reference.GetSize())):
+        raise ValueError("Existing normalized analytical map shape does not match fixed image.")
+    return data_zyx
 
 
 def _write_float_nifti(path, array, reference):
@@ -373,23 +427,35 @@ def _aspect(spacing, plane):
     return spacing[2] / spacing[1]
 
 
-def _render_plane(fixed, analytical, valid, spacing, selected, plane, limit, opacity, anatomy, path):
-    background, index = _plane_view(fixed, selected, plane); values, _ = _plane_view(analytical, selected, plane); domain, _ = _plane_view(valid, selected, plane)
+def _normalization_title(policy):
+    denominator = "(F + epsilon)" if policy == "epsilon" else "F"
+    return f"Normalized registered lung intensity difference: (F - R) / {denominator}"
+
+
+def _draw_lung_contour(axis, mask_view):
+    if np.any(mask_view) and not np.all(mask_view):
+        axis.contour(mask_view.astype(np.uint8), levels=[0.5], colors="white", linewidths=0.55, origin="lower")
+
+
+def _render_plane(fixed, analytical, valid, lung_mask, spacing, selected, plane, limit, opacity, anatomy, path, title):
+    background, index = _plane_view(fixed, selected, plane); values, _ = _plane_view(analytical, selected, plane); domain, _ = _plane_view(valid, selected, plane); contour, _ = _plane_view(lung_mask, selected, plane)
     fig, axis = plt.subplots(figsize=(7, 6)); aspect = _aspect(spacing, plane)
     axis.imshow(background, cmap="gray", vmin=anatomy[0], vmax=anatomy[1], origin="lower", aspect=aspect)
     overlay = axis.imshow(np.ma.masked_where(~domain, values), cmap="RdBu_r", norm=TwoSlopeNorm(vmin=-limit, vcenter=0, vmax=limit), alpha=opacity, origin="lower", aspect=aspect)
+    _draw_lung_contour(axis, contour)
     fig.colorbar(overlay, ax=axis, label="Normalized registered intensity change")
-    axis.set_title(f"{TERMINOLOGY}\n{plane.capitalize()} index {index}; not validated ventilation"); axis.axis("off")
+    axis.set_title(f"{title}\n{plane.capitalize()} index {index}; not validated ventilation"); axis.axis("off")
     fig.savefig(path, dpi=180, bbox_inches="tight"); plt.close(fig)
 
 
-def _render_multi_slice(fixed, analytical, valid, spacing, slices, limit, opacity, anatomy, path):
+def _render_multi_slice(fixed, analytical, valid, lung_mask, spacing, slices, limit, opacity, anatomy, path, title):
     fig, axes = plt.subplots(2, 4, figsize=(14, 7)); norm = TwoSlopeNorm(vmin=-limit, vcenter=0, vmax=limit); last = None
     for axis, z in zip(axes.flat, slices):
         axis.imshow(fixed[z], cmap="gray", vmin=anatomy[0], vmax=anatomy[1], origin="lower", aspect=spacing[1]/spacing[0])
         last = axis.imshow(np.ma.masked_where(~valid[z], analytical[z]), cmap="RdBu_r", norm=norm, alpha=opacity, origin="lower", aspect=spacing[1]/spacing[0])
+        _draw_lung_contour(axis, lung_mask[z])
         axis.set_title(f"Axial z={z}"); axis.axis("off")
     for axis in axes.flat[len(slices):]: axis.axis("off")
     fig.colorbar(last, ax=axes, shrink=0.75, label="Normalized registered intensity change")
-    fig.suptitle(f"{TERMINOLOGY}\nResearch-only; not validated ventilation")
+    fig.suptitle(f"{title}\nResearch-only; not validated ventilation")
     fig.savefig(path, dpi=180, bbox_inches="tight"); plt.close(fig)

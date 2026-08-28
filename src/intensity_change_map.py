@@ -19,6 +19,7 @@ import nibabel as nib
 import numpy as np
 import SimpleITK as sitk
 
+from lung_slice_selection import select_lung_visualization_slices
 from project_paths import DEFAULT_OUTPUTS_DIR, display_path
 from registration_inputs import sha256_file
 from version import PIPELINE_VERSION
@@ -64,12 +65,23 @@ def generate_intensity_change_map(
     histogram_bins: int = 100,
     overwrite: bool = False,
     dry_run: bool = False,
+    figures_only: bool = False,
 ) -> dict[str, Any]:
     """Create research-only registered intensity-change maps without resampling."""
     _validate_options(
         denominator_policy, denominator_threshold, denominator_percentile,
         skip_normalized, display_percentile, overlay_opacity, histogram_bins,
     )
+    output_dir = Path(output_root).expanduser().resolve(strict=False) / case_id / experiment / "intensity_change"
+    output_paths = _output_paths(output_dir, include_normalized=not skip_normalized)
+    if figures_only:
+        return _regenerate_figures_only(
+            fixed_path=fixed_path,
+            lung_mask_path=lung_mask_path,
+            output_paths=output_paths,
+            include_normalized=not skip_normalized,
+            dry_run=dry_run,
+        )
     fixed_file, fixed = _read_scalar_image(fixed_path, "fixed")
     registered_file, registered = _read_scalar_image(registered_path, "registered")
     _require_same_geometry(fixed, registered, "Fixed/registered")
@@ -142,8 +154,6 @@ def generate_intensity_change_map(
         }
 
     selected = _selected_slices(lung_mask)
-    output_dir = Path(output_root).expanduser().resolve(strict=False) / case_id / experiment / "intensity_change"
-    output_paths = _output_paths(output_dir, include_normalized=not skip_normalized)
     if not dry_run:
         existing = [path for path in output_paths.values() if path.exists()]
         if existing and not overwrite:
@@ -351,15 +361,9 @@ def _statistics(values, region, combined, name, valid_normalized):
 
 
 def _selected_slices(mask):
-    coords = np.argwhere(mask)
-    lower, upper = coords.min(axis=0), coords.max(axis=0)
-    center = np.rint((lower + upper) / 2).astype(int)
-    axial = np.rint(np.linspace(lower[0], upper[0], 5)).astype(int)
-    return {
-        "central": {"axial_z": int(center[0]), "coronal_y": int(center[1]), "sagittal_x": int(center[2])},
-        "axial_contact_sheet_z": [int(value) for value in axial],
-        "lung_extent_zyx_inclusive": {"minimum": lower.tolist(), "maximum": upper.tolist()},
-    }
+    selected = select_lung_visualization_slices(mask, axial_panel_count=7)
+    selected["lung_extent_zyx_inclusive"] = selected.pop("lung_extent_zyx")
+    return selected
 
 
 def _output_paths(directory, include_normalized):
@@ -375,6 +379,70 @@ def _output_paths(directory, include_normalized):
         names[name] = directory / filename
     names["manifest"] = directory / "intensity_change_manifest.json"
     return names
+
+
+def _regenerate_figures_only(*, fixed_path, lung_mask_path, output_paths, include_normalized, dry_run):
+    """Regenerate PNG products from existing analytical maps without rewriting analysis."""
+    manifest_path = output_paths["manifest"]
+    if not manifest_path.is_file():
+        raise FileNotFoundError("Figures-only mode requires an existing intensity-change manifest.")
+    manifest = json.loads(manifest_path.read_text())
+    if manifest.get("completion_status") != "complete":
+        raise ValueError("Figures-only mode requires a complete intensity-change manifest.")
+
+    _, fixed = _read_scalar_image(fixed_path, "fixed")
+    _, lung_mask = _read_mask(lung_mask_path, fixed, "combined lung")
+    fixed_array = sitk.GetArrayFromImage(fixed).astype(np.float64, copy=False)
+    names = ["signed", "absolute"] + (["normalized"] if include_normalized else [])
+    analytical = {
+        name: _read_existing_analytical(output_paths[f"{name}_analytical"], fixed, name)
+        for name in names
+    }
+    scaling = {name: manifest["display_scaling"][name] for name in names}
+    _validate_display_scaling(scaling)
+    selected = _selected_slices(lung_mask)
+    result = dict(manifest)
+    result["selected_slices"] = selected
+    result["completion_status"] = "figures-only-dry-run" if dry_run else "figures-only-complete"
+    result["writes_performed"] = not dry_run
+    if dry_run:
+        return result
+
+    visualization = manifest["visualization"]
+    _render_outputs(
+        fixed_array,
+        analytical,
+        lung_mask,
+        selected,
+        scaling,
+        output_paths,
+        float(visualization["overlay_opacity"]),
+        int(visualization["histogram_bins"]),
+        fixed.GetSpacing(),
+    )
+    return result
+
+
+def _read_existing_analytical(path, reference, name):
+    if not path.is_file():
+        raise FileNotFoundError(f"Figures-only mode requires existing {name} analytical NIfTI: {path}")
+    image = sitk.ReadImage(str(path))
+    _require_same_geometry(reference, image, f"Fixed/{name} analytical map")
+    data_xyz = np.asanyarray(nib.load(str(path)).dataobj).astype(np.float64, copy=False)
+    data_zyx = np.transpose(data_xyz, (2, 1, 0))
+    if data_zyx.shape != tuple(reversed(reference.GetSize())):
+        raise ValueError(f"Existing {name} analytical map shape does not match fixed image.")
+    return data_zyx
+
+
+def _validate_display_scaling(scaling):
+    for name, values in scaling.items():
+        low = float(values["display_min"])
+        high = float(values["display_max"])
+        if name in {"signed", "normalized"} and (low >= 0 or high <= 0 or not np.isclose(low, -high)):
+            raise ValueError(f"Existing {name} display limits are not symmetric around zero.")
+        if name == "absolute" and (low < 0 or high <= low):
+            raise ValueError("Existing absolute display limits must be nonnegative and increasing.")
 
 
 def _geometry_dict(image):
@@ -437,19 +505,45 @@ def _style(name, scaling):
     return "RdBu_r", TwoSlopeNorm(vmin=scaling["display_min"], vcenter=0, vmax=scaling["display_max"]), label
 
 
+def _figure_title(name):
+    return {
+        "signed": "Signed registered lung intensity difference: F - R",
+        "absolute": "Absolute registered lung intensity difference: |F - R|",
+        "normalized": "Normalized registered lung intensity difference: (F - R) / F",
+    }[name]
+
+
+def _draw_lung_contour(axis, mask_view):
+    if np.any(mask_view) and not np.all(mask_view):
+        axis.contour(
+            mask_view.astype(np.uint8),
+            levels=[0.5],
+            colors="white",
+            linewidths=0.55,
+            origin="lower",
+        )
+
+
 def _render_overlay(fixed, values, mask, central, spacing, scaling, path, name, low, high, opacity):
     cmap, norm, label = _style(name, scaling)
     fig, axes = plt.subplots(1, 3, figsize=(13, 4.5))
     last = None
-    for axis, fixed_view, value_view in zip(axes, _views(fixed, central, spacing), _views(values, central, spacing)):
+    for axis, fixed_view, value_view, mask_view in zip(
+        axes,
+        _views(fixed, central, spacing),
+        _views(values, central, spacing),
+        _views(mask, central, spacing),
+    ):
         title, anatomy, aspect, index = fixed_view
-        overlay = np.ma.masked_invalid(value_view[1])
+        domain = mask_view[1].astype(bool)
+        overlay = np.ma.masked_where(~domain | ~np.isfinite(value_view[1]), value_view[1])
         axis.imshow(anatomy, cmap="gray", vmin=low, vmax=high, origin="lower", aspect=aspect)
         last = axis.imshow(overlay, cmap=cmap, norm=norm, alpha=opacity, origin="lower", aspect=aspect)
+        _draw_lung_contour(axis, domain)
         axis.set_title(f"{title} index {index}")
         axis.axis("off")
     fig.colorbar(last, ax=axes, shrink=0.75, label=label)
-    fig.suptitle(f"{TERMINOLOGY}\nResearch-only; not validated ventilation", fontsize=11)
+    fig.suptitle(f"{_figure_title(name)}\nResearch-only; not validated ventilation", fontsize=11)
     fig.savefig(path, dpi=160, bbox_inches="tight")
     plt.close(fig)
 
@@ -457,15 +551,18 @@ def _render_overlay(fixed, values, mask, central, spacing, scaling, path, name, 
 def _render_contact_sheet(fixed, values, mask, slices, scaling, path, name, low, high, opacity, spacing_xyz):
     cmap, norm, label = _style(name, scaling)
     fig, axes = plt.subplots(1, len(slices), figsize=(15, 3.4))
+    axes = np.atleast_1d(axes)
     last = None
     for axis, z in zip(axes, slices):
         aspect = spacing_xyz[1] / spacing_xyz[0]
         axis.imshow(fixed[z], cmap="gray", vmin=low, vmax=high, origin="lower", aspect=aspect)
-        last = axis.imshow(np.ma.masked_invalid(values[z]), cmap=cmap, norm=norm, alpha=opacity, origin="lower", aspect=aspect)
+        overlay = np.ma.masked_where(~mask[z] | ~np.isfinite(values[z]), values[z])
+        last = axis.imshow(overlay, cmap=cmap, norm=norm, alpha=opacity, origin="lower", aspect=aspect)
+        _draw_lung_contour(axis, mask[z])
         axis.set_title(f"Axial z={z}")
         axis.axis("off")
     fig.colorbar(last, ax=axes, shrink=0.72, label=label)
-    fig.suptitle("Research-only; not validated ventilation", fontsize=11)
+    fig.suptitle(f"{_figure_title(name)}\nResearch-only; not validated ventilation", fontsize=11)
     fig.savefig(path, dpi=160, bbox_inches="tight")
     plt.close(fig)
 
