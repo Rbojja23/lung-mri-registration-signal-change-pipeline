@@ -235,6 +235,37 @@ The comparison reports metric-wise and runtime winners but never declares an
 overall anatomical winner without expert visual review. All outputs remain
 research-only and non-diagnostic.
 
+### Equal-window Case 1 versus Case 2 difference figures
+
+The original per-case QC figures use one sampled 99th-percentile absolute-
+difference ceiling for the before and after views within a case. That ceiling
+is calculated independently each time QC runs, so the existing Case 1 and
+Case 2 difference figures do not have a genuinely shared cross-case window.
+
+The dedicated research-only comparison reads the completed full-registration
+fixed, original-moving, and registered-moving NIfTIs for both cases. It checks
+their geometry without resampling or changing them, computes
+`abs(fixed - moving)` and `abs(fixed - registered)`, and calculates one display
+maximum from the pooled 99th percentile of all voxels in all four differences.
+Every grayscale, turbo, overlay, and multiplanar difference panel uses that
+same `[0, vmax]` window.
+
+Preview the computed report without persistent writes:
+
+```bash
+python src/compare_registration_differences.py --dry-run --json
+```
+
+Generate the figures and JSON report in
+`outputs/registration/case_comparison/equal_window_registration_differences/`:
+
+```bash
+python src/compare_registration_differences.py
+```
+
+Existing products are protected unless `--overwrite` is supplied. Overlay
+opacity defaults to `0.45` and can be changed with `--opacity`.
+
 ## Preliminary Registered Intensity-Change Mapping
 
 The standalone intensity-change checkpoint generates a **preliminary voxelwise
