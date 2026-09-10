@@ -266,6 +266,48 @@ python src/compare_registration_differences.py
 Existing products are protected unless `--overwrite` is supplied. Overlay
 opacity defaults to `0.45` and can be changed with `--opacity`.
 
+### RGB DICOM Secondary Capture export
+
+The post-registration transparent `turbo` visualization can be exported as
+one anonymized RGB DICOM Secondary Capture series per case. This is a derived,
+8-bit visualization export—not a quantitative DICOM Parametric Map, DICOM SEG,
+RTSTRUCT, or legacy DICOM Overlay Plane. Its irreversibly windowed and blended
+RGB pixels cannot recover the quantitative `abs(fixed - registered)` values.
+
+The exporter requires the completed equal-window report and verifies both
+fixed/registered NIfTI checksums against it. Both cases use its stored shared
+difference limits. Spatial tags are derived from fixed-NIfTI geometry, but no
+relationship to any original clinical DICOM study or instance is claimed.
+
+Preview without persistent writes, then generate both 3-D series:
+
+```bash
+python src/export_registration_difference_dicom.py --dry-run --json
+python src/export_registration_difference_dicom.py
+```
+
+Regenerate only these outputs explicitly:
+
+```bash
+python src/export_registration_difference_dicom.py --opacity 0.45 --overwrite
+```
+
+Import the generated folders into OsiriX MD on macOS:
+
+```bash
+open -a "OsiriX MD" outputs/registration/case_comparison/equal_window_registration_differences/rgb_dicom_secondary_capture/case_1
+open -a "OsiriX MD" outputs/registration/case_comparison/equal_window_registration_differences/rgb_dicom_secondary_capture/case_2
+```
+
+OsiriX Lite or Horos can be substituted as the application name. ITK-SNAP is
+better used for quantitative NIfTI review; the Secondary Capture pixels are
+already RGB-rendered. Open each case's analytical source pair with:
+
+```bash
+/Applications/ITK-SNAP.app/Contents/MacOS/ITK-SNAP -g outputs/registration/registration_case_1/full/preprocessed/fixed.nii.gz -o outputs/registration/registration_case_1/full/deformable/moving_registered.nii.gz
+/Applications/ITK-SNAP.app/Contents/MacOS/ITK-SNAP -g outputs/registration/registration_case_2/full/preprocessed/fixed.nii.gz -o outputs/registration/registration_case_2/full/deformable/moving_registered.nii.gz
+```
+
 ## Preliminary Registered Intensity-Change Mapping
 
 The standalone intensity-change checkpoint generates a **preliminary voxelwise
