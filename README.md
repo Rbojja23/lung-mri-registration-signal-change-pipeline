@@ -308,6 +308,49 @@ already RGB-rendered. Open each case's analytical source pair with:
 /Applications/ITK-SNAP.app/Contents/MacOS/ITK-SNAP -g outputs/registration/registration_case_2/full/preprocessed/fixed.nii.gz -o outputs/registration/registration_case_2/full/deformable/moving_registered.nii.gz
 ```
 
+### Lung-masked turbo difference visualization
+
+The professor-requested composite calculates the absolute difference across
+the complete image. It shows that difference in grayscale everywhere, then
+blends `turbo` color only inside the exact fixed-space combined-lung mask.
+Outside-mask differences are retained, so changes in the chest wall and other
+surrounding anatomy remain visible. Fixed anatomy is not the background.
+
+Both cases and every component use the limits stored in the completed
+equal-window report (`[0, 1005.4111328125]` for the current data). Preview and
+generate the figures with:
+
+```bash
+python src/create_lung_masked_difference_visualization.py --dry-run --json
+python src/create_lung_masked_difference_visualization.py
+```
+
+Preview and generate the visualization-only RGB DICOM Secondary Capture
+series with:
+
+```bash
+python src/export_lung_masked_difference_dicom.py --dry-run --json
+python src/export_lung_masked_difference_dicom.py
+```
+
+Existing outputs are refused unless `--overwrite` is supplied. Import the new
+series into OsiriX MD:
+
+```bash
+open -a "OsiriX MD" outputs/registration/case_comparison/equal_window_registration_differences/lung_masked_turbo_difference/rgb_dicom_secondary_capture/case_1
+open -a "OsiriX MD" outputs/registration/case_comparison/equal_window_registration_differences/lung_masked_turbo_difference/rgb_dicom_secondary_capture/case_2
+```
+
+For ITK-SNAP, use **File → Open Main Image → DICOM series**, navigate to one
+of the two case directories above, and select the detected series. The colors
+are already rendered into the RGB pixels; ITK-SNAP is not applying a
+quantitative `turbo` lookup table.
+
+These RGB pixels are irreversibly windowed visualization values, not a
+quantitative Parametric Map, DICOM SEG, RTSTRUCT, legacy Overlay Plane, or
+clinical overlay. Quantitative absolute-difference values cannot be recovered
+from them.
+
 ## Preliminary Registered Intensity-Change Mapping
 
 The standalone intensity-change checkpoint generates a **preliminary voxelwise

@@ -14,6 +14,206 @@ All paths passed to ITK-SNAP are resolved from the repository location and are
 therefore absolute. The script reads completed products only; it never runs
 segmentation, registration, QC, or analysis code.
 
+## Professor Update — New MRI Results
+
+Command:
+
+```bash
+./presentation_commands.sh professor-update
+```
+
+This global, read-only mode presents only the newest MRI results from the most
+recent professor meeting. It validates every required figure and report before
+opening the first window, prints values directly from the existing reports, and
+opens one presentation figure at a time in this exact order:
+
+1. Case 2 post-registration QC overlay (`full/qc/after_overlay.png`)
+2. Case 2 signed registered lung intensity difference
+3. Case 2 absolute registered lung intensity difference
+4. Case 2 anatomical/functional lung multi-slice overlay
+5. Case 2 machine-epsilon normalized multi-slice map
+6. Case 1 versus Case 2 matched-window grayscale axial differences
+7. Case 1 versus Case 2 matched-window `turbo` axial differences
+8. Case 1 versus Case 2 matched-window transparent `turbo` anatomy overlay
+9. Case 1 versus Case 2 matched-window `turbo` multiplanar differences
+10. Case 1 versus Case 2 lung-masked `turbo` axial differences
+11. Case 1 versus Case 2 lung-masked `turbo` multiplanar differences
+12. Case 1 versus Case 2 registration runtime comparison
+13. Case 1 versus Case 2 registration-quality comparison
+14. Case 1 versus Case 2 intensity-change comparison
+15. Case 1 versus Case 2 normalized-intensity comparison
+
+For the new equal-window figures, say:
+
+> The original QC difference images shared a window within each case but not
+> between cases. These new comparisons use one pooled 99th-percentile window
+> for every Case 1 and Case 2 panel, allowing a fair visual comparison. The
+> transparent turbo version retains the fixed anatomy for spatial context.
+
+Every difference panel uses `abs(fixed - candidate)` and the exact shared
+window `[0, 1005.4111328125]`. The transparent `turbo` anatomy overlay uses
+opacity `0.45`.
+
+For the professor-requested lung-masked composite, say:
+
+> The absolute difference is calculated over the entire image. Inside the
+> fixed-space lung mask, the difference is emphasized with the turbo colormap
+> at 0.45 opacity. Outside the lung mask, the absolute difference remains
+> visible in grayscale, preserving changes in the chest wall and other
+> surrounding anatomy. Every Case 1 and Case 2 view uses the same pooled
+> 99th-percentile window, so the displayed magnitudes are directly comparable.
+
+The terminal summary parses full and cropped runtimes, runtime and voxel
+reductions, signed and absolute means, signed positive/negative fractions,
+normalized means, epsilon policy, and epsilon value from
+`outputs/registration/case_comparison/case_1_vs_case_2.json`. The Case 2
+normalized formula and epsilon are also read from its existing
+`normalized_intensity_report.json`; they are not hardcoded. The presentation
+retains the warning that normalized intensity change is exploratory and is not
+validated ventilation. It does not select a universal registration winner, and
+it states that full and cropped MSE/MAE values are from different spatial
+domains.
+
+For a rehearsal that validates and prints the exact open sequence without
+launching Preview:
+
+```bash
+PRESENTATION_DRY_RUN=1 ./presentation_commands.sh professor-update
+```
+
+Backup-path command:
+
+```bash
+./presentation_commands.sh professor-update-backup
+```
+
+The backup command validates and prints absolute paths without opening them. It
+includes the Case 2 pre-registration overlay, before/after checkerboards,
+before/after difference images, metric summary, error histograms, functional
+lung report, normalized intensity report, the Case 1-versus-Case 2 report, the
+equal-window report, and the RGB Secondary Capture manifest. It is also safe to
+run with `PRESENTATION_DRY_RUN=1`.
+
+## Equal-window Case 1 versus Case 2 differences
+
+Command:
+
+```bash
+./presentation_commands.sh equal-window-differences
+```
+
+This global read-only stage validates the completed equal-window report and
+all four figures before opening them in this order:
+
+1. `matched_window_grayscale_axial.png`
+2. `matched_window_turbo_axial.png`
+3. `matched_window_turbo_overlay_axial.png`
+4. `matched_window_turbo_multiplanar.png`
+
+The formula is `abs(fixed - candidate)`, where the candidate is the original
+moving image before registration and the registered moving image afterward.
+All panels use `[0, 1005.4111328125]`, calculated as the pooled 99th percentile
+of all four Case 1/Case 2 before/after difference volumes. The transparent
+`turbo` overlay has opacity `0.45` and retains grayscale fixed anatomy for
+spatial context.
+
+Rehearse without opening Preview. The command is global, so both case selectors
+validate the same cross-case products:
+
+```bash
+PRESENTATION_DRY_RUN=1 ./presentation_commands.sh --case registration_case_1 equal-window-differences
+PRESENTATION_DRY_RUN=1 ./presentation_commands.sh --case registration_case_2 equal-window-differences
+```
+
+## RGB DICOM Secondary Capture series
+
+Command:
+
+```bash
+./presentation_commands.sh rgb-dicom-series
+```
+
+This validates the completed RGB export manifest and every expected DICOM file
+for both 360-slice series, then reveals the Case 1 and Case 2 directories in
+Finder for import into a DICOM viewer. It never regenerates DICOM or analytical
+products. Rehearse both case-selecting forms without opening Finder:
+
+```bash
+PRESENTATION_DRY_RUN=1 ./presentation_commands.sh --case registration_case_1 rgb-dicom-series
+PRESENTATION_DRY_RUN=1 ./presentation_commands.sh --case registration_case_2 rgb-dicom-series
+```
+
+The series contain derived 8-bit RGB Secondary Capture images for visual
+review. They show grayscale fixed anatomy blended with `turbo`-colored
+`abs(fixed - registered)` at opacity `0.45`, using the same shared window
+`[0, 1005.4111328125]` for both cases. They are not quantitative DICOM
+Parametric Maps, DICOM SEG objects, RTSTRUCTs, legacy DICOM Overlay Planes, or
+clinical overlays; quantitative difference values cannot be recovered from
+the RGB pixels.
+
+Direct OsiriX MD import commands are:
+
+```bash
+open -a "OsiriX MD" outputs/registration/case_comparison/equal_window_registration_differences/rgb_dicom_secondary_capture/case_1
+open -a "OsiriX MD" outputs/registration/case_comparison/equal_window_registration_differences/rgb_dicom_secondary_capture/case_2
+```
+
+## Lung-masked turbo differences
+
+Generate only after a successful dry run:
+
+```bash
+python src/create_lung_masked_difference_visualization.py --dry-run --json
+python src/create_lung_masked_difference_visualization.py
+```
+
+Present the axial and multiplanar figures, in that order:
+
+```bash
+./presentation_commands.sh lung-masked-differences
+PRESENTATION_DRY_RUN=1 ./presentation_commands.sh --case registration_case_1 lung-masked-differences
+PRESENTATION_DRY_RUN=1 ./presentation_commands.sh --case registration_case_2 lung-masked-differences
+```
+
+The background is grayscale `abs(fixed - candidate)` across the whole image,
+not fixed anatomy. Inside the exact fixed-space combined-lung mask, the same
+difference values are blended toward `turbo` at opacity `0.45`. Outside the
+mask, grayscale difference remains visible. All components use the stored
+shared limits `[0, 1005.4111328125]`.
+
+## Lung-masked RGB DICOM Secondary Capture series
+
+Generate only after a successful dry run:
+
+```bash
+python src/export_lung_masked_difference_dicom.py --dry-run --json
+python src/export_lung_masked_difference_dicom.py
+```
+
+Validate and reveal both series for import:
+
+```bash
+./presentation_commands.sh lung-masked-dicom-series
+PRESENTATION_DRY_RUN=1 ./presentation_commands.sh --case registration_case_1 lung-masked-dicom-series
+PRESENTATION_DRY_RUN=1 ./presentation_commands.sh --case registration_case_2 lung-masked-dicom-series
+```
+
+Direct OsiriX MD import commands are:
+
+```bash
+open -a "OsiriX MD" outputs/registration/case_comparison/equal_window_registration_differences/lung_masked_turbo_difference/rgb_dicom_secondary_capture/case_1
+open -a "OsiriX MD" outputs/registration/case_comparison/equal_window_registration_differences/lung_masked_turbo_difference/rgb_dicom_secondary_capture/case_2
+```
+
+In ITK-SNAP, choose **File → Open Main Image → DICOM series**, navigate to a
+case directory above, and select the detected series. The RGB color is already
+rendered and is not an adjustable quantitative `turbo` lookup table.
+
+The series are derived 8-bit RGB Secondary Capture objects for visual review.
+They are not quantitative Parametric Maps, DICOM SEG objects, RTSTRUCTs,
+legacy Overlay Planes, or clinical overlays, and the underlying quantitative
+difference values cannot be recovered from RGB pixels.
+
 ## Original
 
 Command: `./presentation_commands.sh original`
