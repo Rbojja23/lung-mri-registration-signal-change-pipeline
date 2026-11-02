@@ -1,21 +1,124 @@
-# CT/MRI Lung Bounding Box Pipeline
+# CT/MRI Lung Segmentation, Registration, and Signal-Change Pipeline
 
-## Project overview
+## Table of contents
 
-Version 1.1 is a research pipeline for geometry-preserving lung segmentation,
-quality control, 3D bounding-box calculation, cropping, and interactive NIfTI
-review. ITK-SNAP is the primary viewer. Tested RTSTRUCT export remains an
-optional, compatibility-gated integration for suitable original DICOM series.
+1. [Project summary](#project-summary)
+2. [Research scope](#research-scope)
+3. [Workflow overview](#workflow-overview)
+4. [Installation](#installation)
+5. [Default configuration](#default-configuration)
+6. [Quick start](#quick-start)
+7. [Image loading](#image-loading)
+8. [Lung segmentation](#lung-segmentation)
+9. [Segmentation quality control](#segmentation-quality-control)
+10. [Bounding box and cropping](#bounding-box-and-cropping)
+11. [ITK-SNAP preparation](#itk-snap-preparation)
+12. [Registration input preparation](#registration-input-preparation)
+13. [deedsBCV registration](#deedsbcv-registration)
+14. [Registration quality control](#registration-quality-control)
+15. [Cross-case difference comparison](#cross-case-difference-comparison)
+16. [Registered intensity-change analysis](#registered-intensity-change-analysis)
+17. [Fractional MRI signal-change proxy](#fractional-mri-signal-change-proxy)
+18. [Native, mean, and Gaussian comparison](#native-mean-and-gaussian-comparison)
+19. [Horos DICOM export](#horos-dicom-export)
+20. [Presentation workflow](#presentation-workflow)
+21. [Inputs and outputs](#inputs-and-outputs)
+22. [Testing](#testing)
+23. [Data privacy](#data-privacy)
+24. [Recorded limitations](#recorded-limitations)
+25. [Future directions](#future-directions)
 
-## Current capabilities
+---
 
-- Load CT or MR DICOM series and NIfTI images without reorientation.
-- Run TotalSegmentator and derive binary whole-lung and semantic masks.
-- Generate independent segmentation and bounding-box QC artifacts.
-- Compute padded half-open bboxes and geometry-preserving image/mask crops.
-- Prepare MRI left/right lung and bbox labels for ITK-SNAP.
-- Optionally launch ITK-SNAP using argument lists and `shell=False`.
-- Inspect DICOM spatial-reference capability and optionally export RTSTRUCT.
+## Project summary
+
+This repository provides a research-only workflow for:
+
+- Loading CT or MRI data while preserving spatial geometry.
+- Segmenting the lungs with TotalSegmentator.
+- Validating segmentation masks.
+- Calculating padded three-dimensional lung bounding boxes.
+- Producing geometry-preserving full and cropped images.
+- Preparing images and labels for ITK-SNAP.
+- Registering moving MRI volumes to a fixed MRI with deedsBCV.
+- Evaluating registration quality.
+- Calculating exploratory registered-space MRI intensity-change maps.
+- Comparing native, box-mean-filtered, and Gaussian-weighted maps.
+- Exporting presentation-ready figures.
+- Exporting fixed-anatomy RGB DICOM Secondary Capture series for Horos or OsiriX.
+
+The pipeline keeps analytical outputs, visualization products, validity maps, provenance reports, and registration quality-control products separate.
+
+---
+
+## Research scope
+
+This software is intended for research validation only.
+
+The MRI ratio products must be described as:
+
+> Exploratory registered-space fractional MRI signal-change proxies.
+
+They must not be described as:
+
+- Validated fractional ventilation
+- Validated perfusion
+- CT density change
+- A clinical biomarker
+- A diagnostic measurement
+
+MRI signal intensity is generally acquisition-dependent and is not physically calibrated like CT Hounsfield units. Physiological interpretation requires independent validation.
+
+---
+
+## Workflow overview
+
+```text
+CT or MRI input
+    |
+    v
+Geometry-preserving loading
+    |
+    v
+TotalSegmentator lung segmentation
+    |
+    v
+Segmentation quality control
+    |
+    v
+Lung bounding box and geometry-preserving crop
+    |
+    +--------------------------+
+    |                          |
+    v                          v
+ITK-SNAP products       Registration preparation
+                               |
+                               v
+                    Affine + deformable registration
+                               |
+                               v
+                      Registration quality control
+                               |
+                               v
+                  Registered intensity-change analyses
+                               |
+             +-----------------+------------------+
+             |                 |                  |
+             v                 v                  v
+          Native         7×7×7 mean        Gaussian weighted
+             |                 |                  |
+             +-----------------+------------------+
+                               |
+                               v
+               Shared-window comparison figures
+                               |
+                               v
+             Optional Horos RGB DICOM export
+```
+
+The original moving image is retained for registration quality control, but the registered moving image must be used for voxelwise comparison with the fixed image.
+
+---
 
 ## Installation
 
@@ -25,650 +128,601 @@ Create a Python environment and install the active dependencies:
 pip install -r requirements.txt
 ```
 
-TotalSegmentator may download model weights on first inference. `lungmask` is
-not an active dependency. ITK-SNAP is an external application and requires no
-Python package.
+Main dependencies include:
 
-## ITK-SNAP installation
+- NumPy
+- SciPy
+- SimpleITK
+- Matplotlib
+- NiBabel
+- pydicom
+- TotalSegmentator
+- PyYAML
 
-Install ITK-SNAP on macOS at `/Applications/ITK-SNAP.app` (preferred) or
-`~/Applications/ITK-SNAP.app`. Detection reads `Contents/Info.plist`, resolves
-`CFBundleExecutable`, and verifies the executable. `itksnap-wt` is not required.
+TotalSegmentator may download model weights during its first run.
 
-Read-only health check:
+ITK-SNAP and Horos are external applications and are not installed through `requirements.txt`.
 
-```bash
-python src/pipeline.py launch --viewer itksnap --health-check
+---
+
+## Default configuration
+
+Defaults are stored in:
+
+```text
+config/default.yaml
 ```
 
-## deedsBCV setup checkpoint
+Current configuration:
 
-[deedsBCV](https://github.com/mattiaspaul/deedsBCV) is an external MIT-licensed
-registration project. The project pins upstream revision
-`00b46539aa03d23988a241173d8f1f6c0c68dc6a` and applies the tracked minimal
-patch in `third_party/deedsBCV/patches/` during setup. The patch fixes confirmed
-C++ undefined behavior that could produce zero NIfTI dimensions; it does not
-change registration mathematics.
+```yaml
+output_root: outputs
 
-On Apple Silicon, do not use the normal upstream Makefile unchanged: its AVX2
-and SSE4.2 flags target x86 CPUs. The setup script requires `linearBCV` and
-`deedsBCV`; `applyBCV` and `applyBCVfloat` are optional because their upstream
-x86 intrinsic headers may be unavailable on arm64. Optional failures are
-reported without invalidating a successful required build. Homebrew `libomp`
-is used when available; `--without-openmp` selects the serial fallback.
-Cloned source, build-state metadata, and compiled binaries remain ignored;
-patch provenance is recorded in `third_party/deedsBCV/UPSTREAM.md`.
+totalsegmentator:
+  device: auto
+  fast: false
 
-Run diagnostics without cloning or compiling:
+bbox:
+  padding_mm: 5
 
-```bash
-scripts/setup_deedsbcv_macos.sh --check-only
+display:
+  ct_window_center: -500
+  ct_window_width: 1500
+  mr_lower_percentile: 1
+  mr_upper_percentile: 99
+
+launch:
+  enabled: false
+  viewer: itksnap
+
+registration:
+  deeds_bin_dir: null
+  timeout_seconds: 3600
 ```
 
-Fresh setup with OpenMP, or explicitly with the serial fallback:
+General safety behavior:
+
+- Existing products are protected by default.
+- Use `--dry-run` to validate and preview without writing.
+- Use `--json` when available for machine-readable output.
+- Use `--overwrite` only when replacing the selected output is intentional.
+- Source NIfTIs are treated as read-only.
+- Geometry mismatches are rejected rather than silently resampled.
+
+---
+
+## Quick start
+
+### Inspect an image
 
 ```bash
-scripts/setup_deedsbcv_macos.sh
-scripts/setup_deedsbcv_macos.sh --without-openmp
+python src/pipeline.py inspect \
+  --input data/raw/<case>/image.nii.gz \
+  --input-type nifti \
+  --modality mr
 ```
 
-Run safe discovery and help-only health probes:
+### Run the MRI segmentation and viewer-preparation workflow
+
+Preview:
 
 ```bash
-python src/check_deedsbcv.py --health-check
-python src/check_deedsbcv.py --health-check --json
+python src/pipeline.py run-all \
+  --image data/raw/<case>/image.nii.gz \
+  --input-type nifti \
+  --modality mr \
+  --case-id <case_id> \
+  --device auto \
+  --padding-mm 5 \
+  --viewer itksnap \
+  --no-launch \
+  --dry-run
 ```
 
-To force a clean rebuild safely, first save or confirm that the ignored source
-contains no needed changes beyond the tracked patch, then run:
+Run:
 
 ```bash
-scripts/setup_deedsbcv_macos.sh --force
+python src/pipeline.py run-all \
+  --image data/raw/<case>/image.nii.gz \
+  --input-type nifti \
+  --modality mr \
+  --case-id <case_id> \
+  --device auto \
+  --padding-mm 5 \
+  --viewer itksnap \
+  --no-launch
 ```
 
-The script refuses unrelated source modifications instead of silently
-discarding them. Registration outputs remain research-only and non-diagnostic.
+### Generate the native, mean, and Gaussian proxy comparison
 
-Compiled deedsBCV binaries, third-party build files, medical inputs, and future
-registration outputs must not be committed.
+Preview:
+
+```bash
+python src/generate_fractional_signal_change_proxy.py \
+  --dry-run \
+  --json
+```
+
+Generate:
+
+```bash
+python src/generate_fractional_signal_change_proxy.py
+```
+
+### Export the six Horos DICOM series
+
+Preview:
+
+```bash
+python src/export_fractional_proxy_dicom.py \
+  --dry-run \
+  --json
+```
+
+Generate:
+
+```bash
+python src/export_fractional_proxy_dicom.py
+```
+
+---
+
+## Image loading
+
+### Purpose
+
+The image-loading component accepts CT or MRI inputs while preserving:
+
+- Image size
+- Voxel spacing
+- Origin
+- Direction matrix
+- Physical coordinate system
+
+Supported inputs:
+
+- DICOM directories
+- `.nii`
+- `.nii.gz`
+
+### Defaults
+
+- Input type can be selected automatically.
+- NIfTI modality must be supplied because NIfTI headers do not reliably distinguish CT from MRI.
+- No automatic reorientation is performed.
+- No automatic intensity normalization is performed.
+
+### Main inputs
+
+- Input image or DICOM directory
+- Input type
+- Modality
+- Non-identifying case ID
+
+### Adjustable parameters
+
+- `--input-type auto|dicom|nifti`
+- `--modality auto|ct|mr`
+- `--case-id`
+- `--output-root`
+- `--overwrite`
+- `--dry-run`
+
+### Example
+
+```bash
+python src/pipeline.py inspect \
+  --input data/raw/<case>/image.nii.gz \
+  --input-type nifti \
+  --modality mr
+```
+
+### Typical output
+
+```text
+outputs/nifti/<case_id>/
+    geometry-preserving working NIfTI
+```
+
+### Limitations
+
+- Incorrect source metadata is not automatically repaired.
+- NIfTI modality cannot be inferred reliably.
+- DICOM loading depends on a consistent source series.
+- Conversion to NIfTI does not create missing clinical reference metadata.
+
+---
+
+## Lung segmentation
+
+### Purpose
+
+TotalSegmentator produces semantic lung masks.
+
+### Defaults
+
+For MRI:
+
+```text
+Task: total_mr
+```
+
+For CT:
+
+```text
+Task: total
+```
+
+Other defaults:
+
+```text
+Device: auto
+Fast mode: disabled
+```
+
+### Inputs
+
+- Geometry-preserving CT or MRI image
+- Modality
+- Case ID
+
+### Adjustable parameters
+
+- `--device auto|cpu|mps|cuda`
+- `--fast`
+- `--output-root`
+- `--overwrite`
+
+### Example
+
+```bash
+python src/pipeline.py segment \
+  --image outputs/nifti/<case_id>/image_from_dicom.nii.gz \
+  --input-type nifti \
+  --modality mr \
+  --case-id <case_id> \
+  --device auto
+```
+
+### Output
+
+For MRI:
+
+```text
+outputs/totalsegmentator/<case_id>/lungs/
+    lung_left.nii.gz
+    lung_right.nii.gz
+    combined_lungs.nii.gz
+```
+
+For CT, TotalSegmentator produces the supported lung-lobe masks.
+
+### Limitations
+
+- Automated segmentation is not equivalent to expert validation.
+- MRI artifacts and low contrast can affect segmentation.
+- CT five-lobe ITK-SNAP label integration is not fully configured.
+- Segmentation uncertainty is not currently propagated into downstream statistics.
+
+---
+
+## Segmentation quality control
+
+### Purpose
+
+Segmentation quality control verifies:
+
+- Binary mask values
+- Nonempty masks
+- Exact geometry agreement
+- Left/right mask separation
+- Combined-mask consistency
+- Visual alignment with the source image
+
+### Inputs
+
+- Source image
+- Combined lung mask
+- Optional left and right lung masks
+- Modality
+- Case ID
+
+### Example
+
+```bash
+python src/pipeline.py segmentation-qc \
+  --image outputs/nifti/<case_id>/image_from_dicom.nii.gz \
+  --mask outputs/totalsegmentator/<case_id>/lungs/combined_lungs.nii.gz \
+  --individual-mask lung_left=outputs/totalsegmentator/<case_id>/lungs/lung_left.nii.gz \
+  --individual-mask lung_right=outputs/totalsegmentator/<case_id>/lungs/lung_right.nii.gz \
+  --modality mr \
+  --case-id <case_id>
+```
+
+### Outputs
+
+```text
+outputs/figures/<case_id>/
+    filled overlays
+    contour overlays
+    segmentation_qc.json
+```
+
+### Limitations
+
+- Geometry validation does not prove anatomical accuracy.
+- Visual quality control remains necessary.
+- A segmentation may be technically valid but anatomically incomplete.
+
+---
+
+## Bounding box and cropping
+
+### Purpose
+
+The bounding-box component finds the smallest three-dimensional region containing every nonzero lung-mask voxel and adds configurable padding.
+
+Bounding boxes use half-open NumPy intervals:
+
+```text
+[z_min:z_max, y_min:y_max, x_min:x_max)
+```
+
+### Default
+
+```text
+Physical padding: 5 mm
+```
+
+### Inputs
+
+- Source image
+- Combined lung mask
+- Optional individual masks
+
+### Adjustable parameters
+
+- `--padding-mm`
+- `--padding-voxels`
+- `--crop-individual-masks`
+- `--individual-mask`
+- `--output-root`
+- `--overwrite`
+
+### Outputs
+
+```text
+outputs/bbox/<case_id>/
+    bbox.json
+
+outputs/crops/<case_id>/
+    image_crop.nii.gz
+    combined_lungs_crop.nii.gz
+    optional individual-mask crops
+```
+
+SimpleITK region-of-interest cropping preserves spacing and direction and updates the cropped-image origin.
+
+### Limitations
+
+- Padding may be clipped at image boundaries.
+- Cropping reduces surrounding anatomical context.
+- Full and cropped registration metrics describe different voxel domains.
+- A correct bounding box still depends on a correct segmentation.
+
+---
+
+## ITK-SNAP preparation
+
+### Purpose
+
+This component creates geometry-matched labels for interactive review.
+
+### MRI label mapping
+
+| Value | Meaning |
+|---:|---|
+| 0 | Background |
+| 1 | Left lung |
+| 2 | Right lung |
+| 10 | Lung bounding-box shell |
+
+### Inputs
+
+- Source image
+- Left lung mask
+- Right lung mask
+- Bounding-box JSON
+- Modality
+- Case ID
+
+### Outputs
+
+```text
+outputs/itksnap/<case_id>/
+    lungs_multilabel.nii.gz
+    bbox_label.nii.gz
+    lungs_and_bbox_labels.nii.gz
+    label_descriptions.txt
+    launch_manifest.json
+```
+
+### Interpretation
+
+- `lungs_multilabel.nii.gz` is the authoritative semantic segmentation.
+- `bbox_label.nii.gz` is the authoritative six-face bounding-box shell.
+- `lungs_and_bbox_labels.nii.gz` is a visualization convenience.
+- Label 10 takes display priority where the shell and lung labels overlap.
+- The combined display label should not be used for lung-volume measurement.
+
+### Health check
+
+```bash
+python src/pipeline.py launch \
+  --viewer itksnap \
+  --health-check
+```
+
+### Limitations
+
+- Automatic ITK-SNAP discovery currently targets macOS application bundles.
+- CT five-lobe viewer labels are not yet configured in the unified workflow.
+
+---
 
 ## Registration input preparation
 
-Registration roles are always explicit: callers must supply both `--fixed` and
-`--moving`. The preparation tool does not infer roles from filenames, ordering,
-dimensions, or intensities. Provisional assignments can be documented with
-`--role-assignment-source`; omit `--roles-confirmed` until a researcher confirms
-the direction. The moving image will eventually be transformed into the fixed
-image's coordinate space.
+### Purpose
 
-This checkpoint accepts scalar 3D `.nii` and `.nii.gz` images, validates finite
-values and geometry, and creates role-named `.nii.gz` working copies without
-casting, normalization, reorientation, or resampling. Preparation requires a
-matching fixed/moving voxel grid and approximately isotropic spacing. deedsBCV
-does not properly account for anisotropic spacing, so anisotropic or mismatched
-grids are reported in dry-run and rejected in real preparation until a later
-resampling checkpoint.
+Registration preparation creates explicit fixed and moving working images.
 
-Preview preparation without creating directories:
+The moving image is transformed into the fixed image’s coordinate system.
+
+### Required inputs
+
+- Explicit fixed NIfTI
+- Explicit moving NIfTI
+- Non-identifying case ID
+
+### Defaults
+
+```text
+Experiment: full
+Output root: outputs/registration
+Role-assignment source: manual
+Isotropy tolerance: 1e-5
+```
+
+No casting, normalization, reorientation, or resampling is performed.
+
+### Example
 
 ```bash
 python src/prepare_registration_inputs.py \
   --fixed data/raw/registration_test/<case>/<fixed>.nii \
   --moving data/raw/registration_test/<case>/<moving>.nii \
-  --case-id <non-identifying-case-id> \
+  --case-id <case_id> \
   --experiment full \
   --role-assignment-source manual \
   --roles-confirmed \
   --dry-run
 ```
 
-Prepared files are written under:
+Remove `--dry-run` to create:
 
 ```text
-outputs/registration/<case_id>/<experiment>/preprocessed/
+outputs/registration/<case_id>/full/preprocessed/
     fixed.nii.gz
     moving.nii.gz
     preprocessing_manifest.json
 ```
 
-The local manifest records role-confirmation status, safe geometry, streamed
-source/output checksums, and post-write verification. It contains no arbitrary
-NIfTI metadata. No registration binary is run by this preparation command.
+### Adjustable parameters
 
-## Shared-crop registration preparation
+- `--experiment`
+- `--output-root`
+- `--role-assignment-source`
+- `--roles-confirmed`
+- `--isotropy-tolerance`
+- `--overwrite`
 
-The first cropped experiment uses the fixed image's validated half-open lung
-bbox for both fixed and moving images. It never computes an independent moving
-bbox: that could select different voxel regions and invalidate the controlled
-comparison. Fixed and moving full-volume inputs must already share the exact
-size, spacing, origin, and direction. The crop converts bbox order from NumPy
-`z,y,x` to SimpleITK `x,y,z` and uses `RegionOfInterest`, without resampling or
-reorientation.
+### Limitations
 
-Preview the Case 1 crop without writing files:
+- Fixed and moving roles must be scientifically confirmed.
+- Roles are not safely inferable from filenames alone.
+- Mismatched voxel grids are rejected.
+- deedsBCV does not properly account for arbitrary anisotropic spacing.
+
+### Shared cropped registration preparation
+
+The cropped experiment applies one fixed-image bounding box to both fixed and moving images. It does not calculate an independent moving-image crop.
+
+Defaults:
+
+```text
+Source experiment: full
+Destination experiment: cropped
+Role source: inferred-from-repeated-bimg1
+```
+
+Example:
 
 ```bash
 python src/prepare_shared_registration_crop.py \
-  --fixed outputs/registration/registration_case_1/full/preprocessed/fixed.nii.gz \
-  --moving outputs/registration/registration_case_1/full/preprocessed/moving.nii.gz \
-  --bbox-json outputs/bbox/registration_case_1_fixed/bbox.json \
-  --case-id registration_case_1 \
+  --fixed outputs/registration/<case_id>/full/preprocessed/fixed.nii.gz \
+  --moving outputs/registration/<case_id>/full/preprocessed/moving.nii.gz \
+  --bbox-json outputs/bbox/<fixed_case_id>/bbox.json \
+  --case-id <case_id> \
   --source-experiment full \
   --experiment cropped \
-  --role-assignment-source inferred-from-repeated-bimg1 \
   --dry-run
 ```
 
-Remove `--dry-run` to create:
+Output:
 
 ```text
-outputs/registration/registration_case_1/cropped/preprocessed/
+outputs/registration/<case_id>/cropped/preprocessed/
     fixed.nii.gz
     moving.nii.gz
     preprocessing_manifest.json
     shared_crop_manifest.json
 ```
 
-Boundary-touch flags are informational. When a bbox reaches an image edge,
-requested anatomical padding may have been clipped; this does not change the
-shared-crop rule. Existing products require `--overwrite`, which replaces only
-the four cropped preprocessing products and preserves the full experiment.
+Limitations:
 
-After preparation, preview the existing registration runner without executing
-registration:
+- Cropping may alter deformable-registration behavior.
+- Reduced context may increase boundary effects.
+- Cropped and full metrics should not be compared as if they cover identical domains.
 
-```bash
-python src/run_deedsbcv_registration.py \
-  --prepared-dir outputs/registration/registration_case_1/cropped/preprocessed \
-  --case-id registration_case_1 \
-  --experiment cropped \
-  --bin-dir third_party/deedsBCV/build-arm64 \
-  --dry-run
-```
+---
 
-## Registration QC and experiment comparison
+## deedsBCV registration
 
-Registration QC compares the fixed image with the original moving image and
-then with the registered moving image. It reports 3D MSE and MAE (lower is
-better), global normalized cross-correlation and deterministic histogram-based
-mutual information (higher is generally better), runtime, represented volume,
-and the final deedsBCV SSD diagnostic when it can be parsed. These intensity
-metrics do not prove anatomical correctness. A validated memory-efficient 3D
-structural-similarity implementation is not provided, so SSIM is deliberately
-omitted instead of averaging unrelated 2D scores.
+### Purpose
 
-Optional aligned binary masks enable fixed-mask and intersection-domain
-metrics. Dice is reported only when corresponding anatomical masks are
-provided; it cannot be inferred from intensity images.
+deedsBCV performs:
 
-Evaluate an existing experiment without rerunning registration:
+1. Affine registration
+2. Deformable registration
+
+### Setup
+
+Check the local environment:
 
 ```bash
-python src/evaluate_registration.py \
-  --case-id registration_case_1 \
-  --experiment full \
-  --experiment-dir outputs/registration/registration_case_1/full \
-  --fixed outputs/registration/registration_case_1/full/preprocessed/fixed.nii.gz \
-  --moving outputs/registration/registration_case_1/full/preprocessed/moving.nii.gz \
-  --registered outputs/registration/registration_case_1/full/deformable/moving_registered.nii.gz \
-  --registration-manifest outputs/registration/registration_case_1/full/registration_manifest.json
+scripts/setup_deedsbcv_macos.sh --check-only
 ```
 
-Each experiment receives `qc/registration_qc.json` plus before/after overlays,
-checkerboards, and matched-scale difference images. ITK-SNAP review can be
-requested with `--launch-itksnap`, which opens fixed as the main image and both
-moving images as intensity overlays. Use `--dry-run-launch` to inspect the
-launch plan without opening an application.
-
-Compare completed full and cropped QC manifests with:
+Build with OpenMP where available:
 
 ```bash
-python src/evaluate_registration.py \
-  --compare \
-  --case-id registration_case_1 \
-  --full-qc outputs/registration/registration_case_1/full/qc/registration_qc.json \
-  --cropped-qc outputs/registration/registration_case_1/cropped/qc/registration_qc.json \
-  --output-dir outputs/registration/registration_case_1/comparison
+scripts/setup_deedsbcv_macos.sh
 ```
 
-The comparison reports metric-wise and runtime winners but never declares an
-overall anatomical winner without expert visual review. All outputs remain
-research-only and non-diagnostic.
-
-### Equal-window Case 1 versus Case 2 difference figures
-
-The original per-case QC figures use one sampled 99th-percentile absolute-
-difference ceiling for the before and after views within a case. That ceiling
-is calculated independently each time QC runs, so the existing Case 1 and
-Case 2 difference figures do not have a genuinely shared cross-case window.
-
-The dedicated research-only comparison reads the completed full-registration
-fixed, original-moving, and registered-moving NIfTIs for both cases. It checks
-their geometry without resampling or changing them, computes
-`abs(fixed - moving)` and `abs(fixed - registered)`, and calculates one display
-maximum from the pooled 99th percentile of all voxels in all four differences.
-Every grayscale, turbo, overlay, and multiplanar difference panel uses that
-same `[0, vmax]` window.
-
-Preview the computed report without persistent writes:
+Use the serial fallback:
 
 ```bash
-python src/compare_registration_differences.py --dry-run --json
+scripts/setup_deedsbcv_macos.sh --without-openmp
 ```
 
-Generate the figures and JSON report in
-`outputs/registration/case_comparison/equal_window_registration_differences/`:
+Check the compiled tools:
 
 ```bash
-python src/compare_registration_differences.py
+python src/check_deedsbcv.py \
+  --health-check \
+  --json
 ```
 
-Existing products are protected unless `--overwrite` is supplied. Overlay
-opacity defaults to `0.45` and can be changed with `--opacity`.
-
-### RGB DICOM Secondary Capture export
-
-The post-registration transparent `turbo` visualization can be exported as
-one anonymized RGB DICOM Secondary Capture series per case. This is a derived,
-8-bit visualization export—not a quantitative DICOM Parametric Map, DICOM SEG,
-RTSTRUCT, or legacy DICOM Overlay Plane. Its irreversibly windowed and blended
-RGB pixels cannot recover the quantitative `abs(fixed - registered)` values.
-
-The exporter requires the completed equal-window report and verifies both
-fixed/registered NIfTI checksums against it. Both cases use its stored shared
-difference limits. Spatial tags are derived from fixed-NIfTI geometry, but no
-relationship to any original clinical DICOM study or instance is claimed.
-
-Preview without persistent writes, then generate both 3-D series:
-
-```bash
-python src/export_registration_difference_dicom.py --dry-run --json
-python src/export_registration_difference_dicom.py
-```
-
-Regenerate only these outputs explicitly:
-
-```bash
-python src/export_registration_difference_dicom.py --opacity 0.45 --overwrite
-```
-
-Import the generated folders into OsiriX MD on macOS:
-
-```bash
-open -a "OsiriX MD" outputs/registration/case_comparison/equal_window_registration_differences/rgb_dicom_secondary_capture/case_1
-open -a "OsiriX MD" outputs/registration/case_comparison/equal_window_registration_differences/rgb_dicom_secondary_capture/case_2
-```
-
-OsiriX Lite or Horos can be substituted as the application name. ITK-SNAP is
-better used for quantitative NIfTI review; the Secondary Capture pixels are
-already RGB-rendered. Open each case's analytical source pair with:
-
-```bash
-/Applications/ITK-SNAP.app/Contents/MacOS/ITK-SNAP -g outputs/registration/registration_case_1/full/preprocessed/fixed.nii.gz -o outputs/registration/registration_case_1/full/deformable/moving_registered.nii.gz
-/Applications/ITK-SNAP.app/Contents/MacOS/ITK-SNAP -g outputs/registration/registration_case_2/full/preprocessed/fixed.nii.gz -o outputs/registration/registration_case_2/full/deformable/moving_registered.nii.gz
-```
-
-### Lung-masked turbo difference visualization
-
-The professor-requested composite calculates the absolute difference across
-the complete image. It shows that difference in grayscale everywhere, then
-blends `turbo` color only inside the exact fixed-space combined-lung mask.
-Outside-mask differences are retained, so changes in the chest wall and other
-surrounding anatomy remain visible. Fixed anatomy is not the background.
-
-Both cases and every component use the limits stored in the completed
-equal-window report (`[0, 1005.4111328125]` for the current data). Preview and
-generate the figures with:
-
-```bash
-python src/create_lung_masked_difference_visualization.py --dry-run --json
-python src/create_lung_masked_difference_visualization.py
-```
-
-Preview and generate the visualization-only RGB DICOM Secondary Capture
-series with:
-
-```bash
-python src/export_lung_masked_difference_dicom.py --dry-run --json
-python src/export_lung_masked_difference_dicom.py
-```
-
-Existing outputs are refused unless `--overwrite` is supplied. Import the new
-series into OsiriX MD:
-
-```bash
-open -a "OsiriX MD" outputs/registration/case_comparison/equal_window_registration_differences/lung_masked_turbo_difference/rgb_dicom_secondary_capture/case_1
-open -a "OsiriX MD" outputs/registration/case_comparison/equal_window_registration_differences/lung_masked_turbo_difference/rgb_dicom_secondary_capture/case_2
-```
-
-For ITK-SNAP, use **File → Open Main Image → DICOM series**, navigate to one
-of the two case directories above, and select the detected series. The colors
-are already rendered into the RGB pixels; ITK-SNAP is not applying a
-quantitative `turbo` lookup table.
-
-These RGB pixels are irreversibly windowed visualization values, not a
-quantitative Parametric Map, DICOM SEG, RTSTRUCT, legacy Overlay Plane, or
-clinical overlay. Quantitative absolute-difference values cannot be recovered
-from them.
-
-## Preliminary Registered Intensity-Change Mapping
-
-The standalone intensity-change checkpoint generates a **preliminary voxelwise
-registered intensity-change map**, not a validated ventilation biomarker. It
-computes signed `fixed - registered`, absolute `abs(fixed - registered)`, and,
-only with an explicit denominator policy, a normalized map. Analytical values
-are restricted to the fixed combined-lung mask and remain NaN outside their
-valid domains.
-
-The preliminary intensity-change command's normalized option requires either an
-explicit absolute fixed-intensity threshold or an explicitly selected
-exploratory lung-intensity percentile. The separate normalized-map checkpoint
-described below also supports the professor-requested epsilon equation. Use
-`--skip-normalized` when only signed and absolute maps are wanted.
-
-Analytical NIfTIs preserve unclipped floating-point values and fixed-image
-geometry. Separate display NIfTIs are finite, zero outside the lung mask, and
-clipped at a documented lung-only display percentile. PNGs retain fixed anatomy
-outside the lungs and show colored overlays only for valid lung voxels.
-deedsBCV's trilinear interpolation may smooth or mix registered intensities.
-
-Moving modality, respiratory state/ordering, and intensity calibration remain
-unconfirmed. These products are research-only and non-diagnostic. They may be
-viewed as ITK-SNAP intensity overlays, for example:
-
-```bash
-open -a "ITK-SNAP" --args \
-  -g outputs/registration/<case_id>/<experiment>/preprocessed/fixed.nii.gz \
-  -o outputs/registration/<case_id>/<experiment>/intensity_change/signed_difference_display.nii.gz \
-  -s outputs/totalsegmentator/<fixed_case>/lungs/combined_lungs.nii.gz
-```
-
-## Standalone Registration Metric Analysis
-
-The metric-analysis checkpoint explains an existing registration without
-running or changing registration. It reports before/after MSE, MAE, RMSE, NCC,
-mutual information, and SSD for the whole image and, when an aligned lung mask
-is supplied, for lung-only and outside-lung domains. Each metric includes its
-direction, absolute improvement, and percentage improvement.
-
-The report also summarizes signed and absolute voxelwise errors, compares
-moving and registered intensity distributions, and records the effect expected
-from deedsBCV's trilinear interpolation. MSE emphasizes large errors, MAE
-responds directly to absolute intensity and interpolation changes, RMSE retains
-the original intensity units, NCC measures centered pattern agreement, and MI
-measures statistical dependence. No metric is treated as universally best.
-
-The command writes `registration_metric_report.json`, a metric summary,
-error-distribution plots, and matched-scale grayscale-anatomy error overlays to
-an explicitly selected analysis directory. Preview validation and calculations
-without writing anything using `--dry-run`:
-
-```bash
-python src/analyze_registration_metrics.py \
-  --fixed outputs/registration/<case_id>/<experiment>/preprocessed/fixed.nii.gz \
-  --moving outputs/registration/<case_id>/<experiment>/preprocessed/moving.nii.gz \
-  --registered outputs/registration/<case_id>/<experiment>/deformable/moving_registered.nii.gz \
-  --lung-mask outputs/totalsegmentator/<fixed_case>/lungs/combined_lungs.nii.gz \
-  --output-dir outputs/registration/<case_id>/<experiment>/metric_analysis \
-  --dry-run --json
-```
-
-## Exploratory Functional-Lung Analysis
-
-The standalone functional-lung checkpoint explores whether spatially coherent
-regional intensity changes exist after registration. Despite its name, it does
-not calculate or claim validated ventilation, physiology, or a clinical
-biomarker. It computes only signed `fixed - registered` and absolute
-`abs(fixed - registered)` intensity change. It does not normalize by fixed
-intensity.
-
-All calculations are restricted to the combined fixed-space lung mask. Supplied
-left/right masks enable semantic regional summaries; if they are omitted, the
-tool creates explicitly labeled geometric physical-x partitions that are not
-semantic segmentations. It reports whole/left/right descriptive statistics,
-axial slice trends, descriptive left-right asymmetry, and the largest
-6-connected positive and negative sign regions without biological
-interpretation.
-
-Outputs include `functional_lung_report.json`, axial/coronal/sagittal overlays,
-a multi-slice panel, slice mean/standard-deviation plots, and lung-only
-histograms. Every overlay uses fixed grayscale anatomy, lung-only color, and a
-shared symmetric scale centered at zero. Respiratory state, moving modality,
-intensity comparability, registration error, and interpolation effects remain
-important unresolved limitations.
-
-Preview the analysis without writing files:
-
-```bash
-python src/analyze_functional_lung.py \
-  --fixed outputs/registration/<case_id>/<experiment>/preprocessed/fixed.nii.gz \
-  --registered outputs/registration/<case_id>/<experiment>/deformable/moving_registered.nii.gz \
-  --lung-mask outputs/totalsegmentator/<fixed_case>/lungs/combined_lungs.nii.gz \
-  --left-lung outputs/totalsegmentator/<fixed_case>/lungs/lung_left.nii.gz \
-  --right-lung outputs/totalsegmentator/<fixed_case>/lungs/lung_right.nii.gz \
-  --output-dir outputs/registration/<case_id>/<experiment>/functional_lung \
-  --dry-run --json
-```
-
-## Exploratory Normalized Registered Intensity-Change Map
-
-The standalone exploratory checkpoint creates an **Exploratory normalized
-registered intensity-change map**. It supports the original threshold policy,
-`(fixed - registered) / fixed` where `abs(fixed) >= threshold`, and the
-professor-requested epsilon policy, `(fixed - registered) / (fixed + epsilon)`.
-It is not a validated ventilation measurement or biomarker and makes no
-physiological claim. Respiratory phase, moving modality, MR intensity
-calibration, and cross-acquisition intensity comparability remain unresolved;
-registration and trilinear interpolation also contribute to observed values.
-
-Both policies calculate only in the combined fixed-space lung mask. Absolute
-mode requires a finite, strictly positive threshold and leaves excluded
-denominators as NaN. Epsilon mode performs no threshold-based exclusion and
-requires either `--epsilon machine` or an explicit finite, strictly positive
-number. It uses float64 computation; `machine` means exactly
-`2.220446049250313e-16`, NumPy's float64 machine epsilon near 1. This protects
-an exact zero denominator numerically, but does not meaningfully stabilize
-genuinely small intensities or establish a scientifically preferred value.
-Larger explicit values are supported for sensitivity analysis and are never
-selected automatically.
-
-The requested `fixed + epsilon` equation is preserved exactly. A positive
-epsilon is asymmetric around zero: it moves negative fixed intensities toward
-zero and is undefined if `fixed == -epsilon`. The report records negative,
-exact-zero, and descriptively near-zero fixed-lung voxel counts so this
-limitation is visible. No interpolation or resampling is performed here.
-
-`normalized_difference.nii.gz` is an unclipped float32 analytical map with fixed
-geometry. `normalized_difference_display.nii.gz` is a separate finite display
-copy, zero outside valid lung voxels and symmetrically clipped around zero.
-Axial, coronal, sagittal, and multi-slice figures use grayscale anatomy with a
-transparent valid-lung overlay and one shared diverging scale.
-
-Preview the Exploratory normalized registered intensity-change map without
-writing files in the backward-compatible absolute-threshold mode:
-
-```bash
-python src/generate_normalized_intensity_map.py \
-  --fixed outputs/registration/<case_id>/<experiment>/preprocessed/fixed.nii.gz \
-  --registered outputs/registration/<case_id>/<experiment>/deformable/moving_registered.nii.gz \
-  --lung-mask outputs/totalsegmentator/<fixed_case>/lungs/combined_lungs.nii.gz \
-  --left-lung outputs/totalsegmentator/<fixed_case>/lungs/lung_left.nii.gz \
-  --right-lung outputs/totalsegmentator/<fixed_case>/lungs/lung_right.nii.gz \
-  --output-dir outputs/registration/<case_id>/<experiment>/normalized_intensity \
-  --denominator-policy absolute \
-  --denominator-threshold <VALUE_TO_CONFIRM> \
-  --dry-run --json
-```
-
-Preview the epsilon mode in a separate directory so threshold-based products
-are not overwritten:
-
-```bash
-python src/generate_normalized_intensity_map.py \
-  --fixed outputs/registration/<case_id>/<experiment>/preprocessed/fixed.nii.gz \
-  --registered outputs/registration/<case_id>/<experiment>/deformable/moving_registered.nii.gz \
-  --lung-mask outputs/totalsegmentator/<fixed_case>/lungs/combined_lungs.nii.gz \
-  --left-lung outputs/totalsegmentator/<fixed_case>/lungs/lung_left.nii.gz \
-  --right-lung outputs/totalsegmentator/<fixed_case>/lungs/lung_right.nii.gz \
-  --output-dir outputs/registration/<case_id>/<experiment>/normalized_intensity_epsilon \
-  --denominator-policy epsilon \
-  --epsilon machine \
-  --dry-run --json
-```
-
-The analytical NIfTI is float32, unclipped, fixed-geometry, and NaN outside its
-lung-domain calculation. The separate display NIfTI is finite, zero outside the
-lung, and symmetrically clipped only for visualization. Output replacement
-still requires `--overwrite`; choosing the dedicated epsilon directory keeps
-the original threshold products intact by default. All outputs are
-research-only and non-diagnostic.
-
-## Report-Driven Case Comparison
-
-The standalone case comparison consumes completed Case 1 and Case 2 JSON
-reports only. It does not read medical images or rerun segmentation,
-registration, QC, or analysis stages. Before comparing results, it validates
-the deedsBCV build and default-by-omission command strategy, fixed-derived crop
-method and padding, MI bins, metric definitions, display percentiles,
-fixed-space lung masking, and normalized formula and epsilon provenance.
-
-## Exploratory fractional MRI signal-change proxy
-
-The dedicated cross-case checkpoint creates a research-only **registered-space
-fractional MRI signal-change proxy**. It is not validated fractional
-ventilation, perfusion, CT density change, or a clinical biomarker. It uses the
-registered moving MRI because the original moving image is not in voxelwise
-fixed-image anatomical correspondence:
+### Defaults
 
 ```text
-P = (registered_moving - fixed) / registered_moving
+Experiment: full
+Timeout: 3600 seconds per registration stage
 ```
 
-Calculation is restricted to the exact binary fixed-space combined-lung mask.
-The default denominator policy requires
-`abs(registered_moving) >= 0.01 * median(abs(registered_moving))`, where the
-median is calculated separately for each case over finite voxels in that
-case's fixed-space lung mask. Machine epsilon is not used. An explicit
-absolute signal threshold can be selected instead. Invalid and outside-lung
-analytical voxels are NaN and separate binary validity maps are saved.
+The baseline registration uses upstream defaults by omission. It does not silently add optional optimization or segmentation parameters.
 
-Three analytical variants are produced without modifying any registration or
-earlier analysis product:
-
-1. Native: the formula is applied directly on valid registered-space inputs.
-2. Mean-filtered: a normalized mask-aware `7 x 7 x 7` box mean is applied
-   separately to fixed and registered-moving inputs before the ratio. Invalid
-   native voxels do not contribute to either filtered input. No post-ratio
-   filtering is performed.
-3. Gaussian-filtered: the same pre-ratio, mask-aware normalized filtering is
-   performed with a finite physical-space Gaussian kernel. The default
-   `sigma = 2.5 mm` and `1.5 sigma` truncation give nearby voxels greater
-   influence than distant voxels. Its one-dimensional weights are proportional to
-   `exp(-d^2 / (2 sigma^2))` and are normalized before separable 3-D
-   convolution. This sigma is exploratory and is not physiologically
-   validated.
-
-At the current `1.2977099418640137 mm` isotropic spacing, the default converts
-to `1.92647 voxels` per axis and a `7 x 7 x 7` discrete kernel, covering
-`9.083969593048096 mm` per axis by voxel-cell extent (a `7.786259651184082 mm`
-first-to-last center span). This is deliberately comparable in support, but is
-not mathematically identical, to the box mean. Figures retain fixed grayscale anatomy everywhere,
-place `RdBu_r` proxy color only at valid lung voxels, draw the exact lung-mask
-contour, and use one zero-centered symmetric window pooled from both cases and
-all three analytical variants.
-
-Preview the complete calculation without writing files, then generate the new
-isolated output tree:
-
-```bash
-python src/generate_fractional_signal_change_proxy.py --dry-run --json
-python src/generate_fractional_signal_change_proxy.py
-```
-
-Change the exploratory Gaussian weighting with `--gaussian-sigma-mm` and
-`--gaussian-truncate`, or explicitly set `--gaussian-support-radius-mm`.
-Physical spacing is used independently on each axis, so anisotropic data gets
-axis-specific voxel sigmas and discrete support. A larger sigma makes weights
-more uniform within a fixed support; a smaller sigma emphasizes the center.
-
-Use a confirmed absolute denominator threshold when available from an MRI
-noise/calibration analysis:
-
-```bash
-python src/generate_fractional_signal_change_proxy.py \
-  --denominator-threshold <POSITIVE_MRI_SIGNAL_VALUE> \
-  --output-dir outputs/registration/case_comparison/fractional_mri_signal_change_proxy_absolute
-```
-
-Existing named products are protected unless `--overwrite` is supplied. The
-default outputs are under
-`outputs/registration/case_comparison/fractional_mri_signal_change_proxy_gaussian_mm_comparison/`
-and include native, mean-filtered, and Gaussian-filtered analytical NIfTIs and validity maps for both cases,
-axial and multiplanar comparison figures, and a provenance-rich JSON report.
-
-### Horos RGB Secondary Capture export
-
-The completed six-map comparison can be exported as six independent,
-Horos-compatible RGB DICOM Secondary Capture series: native, `7 x 7 x 7`
-mean, and Gaussian for each case. Every slice uses the corresponding fixed MRI
-as its grayscale background. Signed `RdBu_r` color is blended only where the
-method validity map, finite proxy values, and exact fixed-space lung mask all
-agree. No difference image is loaded or displayed.
-
-```bash
-python src/export_fractional_proxy_dicom.py --dry-run --json
-python src/export_fractional_proxy_dicom.py
-```
-
-The default opacity is `0.62`, matching the PNG comparison. The exporter reads
-the six-map limits and grayscale window from the completed JSON report, derives
-spatial tags from fixed-NIfTI geometry, and refuses existing targets unless
-`--overwrite` is explicit. These anonymized 8-bit RGB objects are
-visualization-only NIfTI derivatives—not original clinical DICOM objects or
-quantitative DICOM Parametric Maps—and no clinical reference relationship is
-claimed.
-
-Import all six series into Horos:
-
-```bash
-open -a Horos outputs/registration/case_comparison/fractional_mri_signal_change_proxy_gaussian_mm_comparison/horos_rgb_dicom_secondary_capture/case_1/native
-open -a Horos outputs/registration/case_comparison/fractional_mri_signal_change_proxy_gaussian_mm_comparison/horos_rgb_dicom_secondary_capture/case_1/mean
-open -a Horos outputs/registration/case_comparison/fractional_mri_signal_change_proxy_gaussian_mm_comparison/horos_rgb_dicom_secondary_capture/case_1/gaussian
-open -a Horos outputs/registration/case_comparison/fractional_mri_signal_change_proxy_gaussian_mm_comparison/horos_rgb_dicom_secondary_capture/case_2/native
-open -a Horos outputs/registration/case_comparison/fractional_mri_signal_change_proxy_gaussian_mm_comparison/horos_rgb_dicom_secondary_capture/case_2/mean
-open -a Horos outputs/registration/case_comparison/fractional_mri_signal_change_proxy_gaussian_mm_comparison/horos_rgb_dicom_secondary_capture/case_2/gaussian
-```
-
-Preview validation and calculations without writing outputs:
-
-```bash
-python src/compare_registration_cases.py \
-  --case-1-dir outputs/registration/registration_case_1 \
-  --case-2-dir outputs/registration/registration_case_2 \
-  --output-dir outputs/registration/case_comparison \
-  --dry-run --json
-```
-
-The real command writes `case_1_vs_case_2.json` plus presentation-ready runtime,
-registration-quality, residual intensity-change, functional-lung, and
-compatible machine-epsilon normalized comparison figures. Full and cropped
-error metrics remain explicitly separated because they cover different spatial
-domains. Lung-only metrics are preferred for descriptive lung-domain review.
-The report sets `overall_case_winner` to null and makes no biological, clinical,
-or ventilation claim. Existing results require `--overwrite` to replace.
-
-## Default deedsBCV registration
-
-Registration requires a completed `preprocessed/` directory from the input
-preparation checkpoint. The standalone runner validates its manifest and
-checksums, then runs full-volume affine registration followed by deformable
-registration. Fixed and moving roles are never inferred or reversed.
-
-The baseline uses upstream defaults by omission. The generated commands contain
-only the required `-F`, `-M`, and `-O` arguments, plus the affine matrix `-A` for
-the deformable stage; no `-G`, `-L`, `-Q`, `-a`, or segmentation option is added.
-
-Preview the exact commands without creating files or executing binaries:
+### Preview
 
 ```bash
 python src/run_deedsbcv_registration.py \
@@ -679,11 +733,21 @@ python src/run_deedsbcv_registration.py \
   --dry-run
 ```
 
-Registration products are scoped to the selected experiment:
+### Adjustable parameters
+
+- `--experiment`
+- `--bin-dir`
+- `--timeout-seconds`
+- `--resume`
+- `--overwrite`
+
+`--resume` and `--overwrite` are mutually exclusive.
+
+### Outputs
 
 ```text
-outputs/registration/<case_id>/full/
-    preprocessed/                     preserved inputs
+outputs/registration/<case_id>/<experiment>/
+    preprocessed/
     affine/
         affine_matrix.txt
         linear_stdout.log
@@ -696,223 +760,957 @@ outputs/registration/<case_id>/full/
     registration_manifest.json
 ```
 
-The timeout applies independently to each stage and defaults to
-`registration.timeout_seconds` in `config/default.yaml`. A timeout,
-interruption, nonzero exit, or malformed output leaves an incomplete manifest
-and is never reported as success. `--resume` reuses only semantically matching,
-verified stages; `--overwrite` replaces only registration products for the
-selected case and experiment while preserving prepared inputs. These options
-are mutually exclusive.
+### Limitations
 
-This workflow is research-only and non-diagnostic. Output plausibility checks
-do not establish anatomical correctness; registration QC is the next planned
-checkpoint. Cropped registration is not implemented here.
+- Successful execution does not establish correct anatomy.
+- Interpolation changes the registered-moving intensity distribution.
+- Registration behavior depends on contrast, field of view, respiratory state, and acquisition consistency.
+- Registration deformation is not automatically a physiological ventilation measurement.
+
+---
+
+## Registration quality control
+
+### Purpose
+
+Registration quality control compares:
+
+```text
+fixed versus original moving
+fixed versus registered moving
+```
+
+### Metrics
+
+- Mean squared error
+- Mean absolute error
+- Normalized cross-correlation
+- Mutual information
+- Optional mask Dice
+- Registration runtime
+- Represented volume
+- deedsBCV SSD diagnostic when available
+
+### Default
+
+```text
+Histogram bins: 64
+```
+
+### Example
+
+```bash
+python src/evaluate_registration.py \
+  --case-id <case_id> \
+  --experiment full \
+  --experiment-dir outputs/registration/<case_id>/full \
+  --fixed outputs/registration/<case_id>/full/preprocessed/fixed.nii.gz \
+  --moving outputs/registration/<case_id>/full/preprocessed/moving.nii.gz \
+  --registered outputs/registration/<case_id>/full/deformable/moving_registered.nii.gz \
+  --registration-manifest outputs/registration/<case_id>/full/registration_manifest.json
+```
+
+### Outputs
+
+```text
+outputs/registration/<case_id>/<experiment>/qc/
+    registration_qc.json
+    before_overlay.png
+    after_overlay.png
+    before_checkerboard.png
+    after_checkerboard.png
+    before_difference.png
+    after_difference.png
+```
+
+### Adjustable parameters
+
+- Histogram bins
+- Fixed, moving, and registered masks
+- Output directory
+- ITK-SNAP launch
+- Dry-run launch
+- Overwrite behavior
+
+### Limitations
+
+- Intensity metrics do not prove anatomical correctness.
+- Interpolation can improve error metrics without improving anatomy.
+- Dice requires valid corresponding masks.
+- No metric is treated as a universal registration score.
+- SSIM is intentionally omitted because a validated memory-efficient 3-D implementation is not provided.
+
+### Detailed registration metric analysis
+
+Defaults:
+
+```text
+Histogram bins: 100
+Mutual-information bins: 64
+Display percentile: 99
+```
+
+Example:
+
+```bash
+python src/analyze_registration_metrics.py \
+  --fixed outputs/registration/<case_id>/full/preprocessed/fixed.nii.gz \
+  --moving outputs/registration/<case_id>/full/preprocessed/moving.nii.gz \
+  --registered outputs/registration/<case_id>/full/deformable/moving_registered.nii.gz \
+  --lung-mask outputs/totalsegmentator/<fixed_case_id>/lungs/combined_lungs.nii.gz \
+  --output-dir outputs/registration/<case_id>/full/metric_analysis \
+  --dry-run \
+  --json
+```
+
+Outputs include:
+
+- Registration metric report
+- Metric summary figure
+- Error histograms
+- Difference-statistics figures
+- Whole-image and lung-domain summaries
+
+---
+
+## Cross-case difference comparison
+
+### Purpose
+
+This component compares Case 1 and Case 2 using a single pooled display window.
+
+It computes:
+
+```text
+abs(fixed - original_moving)
+abs(fixed - registered_moving)
+```
+
+### Defaults
+
+```text
+Pooled display percentile: 99
+Overlay opacity: 0.45
+Positive-magnitude colormap: turbo
+```
+
+### Generate
+
+```bash
+python src/compare_registration_differences.py \
+  --dry-run \
+  --json
+
+python src/compare_registration_differences.py
+```
+
+### Adjustable parameters
+
+- Case directories
+- Output directory
+- Display percentile
+- Overlay opacity
+- Overwrite behavior
+
+### Outputs
+
+```text
+outputs/registration/case_comparison/equal_window_registration_differences/
+    matched_window_grayscale_axial.png
+    matched_window_turbo_axial.png
+    matched_window_turbo_overlay_axial.png
+    matched_window_turbo_multiplanar.png
+    equal_window_registration_difference_report.json
+```
+
+### Limitations
+
+- These are absolute-difference quality-control products.
+- They are not the fractional MRI signal-change proxy.
+- Difference magnitude can contain acquisition change, registration error, noise, and interpolation effects.
+- `turbo` is used only for nonnegative magnitudes and should not be used for signed proxy maps.
+
+---
+
+## Registered intensity-change analysis
+
+### Preliminary signed and absolute maps
+
+Definitions:
+
+```text
+signed difference = fixed - registered
+absolute difference = abs(fixed - registered)
+```
+
+Defaults:
+
+```text
+Experiment: full
+Display percentile: 99
+Overlay opacity: 0.45
+Histogram bins: 100
+```
+
+Example:
+
+```bash
+python src/generate_intensity_change_map.py \
+  --fixed outputs/registration/<case_id>/full/preprocessed/fixed.nii.gz \
+  --registered outputs/registration/<case_id>/full/deformable/moving_registered.nii.gz \
+  --lung-mask outputs/totalsegmentator/<fixed_case_id>/lungs/combined_lungs.nii.gz \
+  --case-id <case_id> \
+  --experiment full \
+  --skip-normalized \
+  --dry-run \
+  --json
+```
+
+Adjustable parameters:
+
+- Denominator policy
+- Absolute denominator threshold
+- Denominator percentile
+- Display percentile
+- Overlay opacity
+- Histogram bins
+- Figures-only regeneration
+- Output root
+
+Limitations:
+
+- Signal difference does not directly measure ventilation.
+- MRI signal may not be comparable across acquisitions.
+- Registration interpolation affects the registered image.
+- Analytical values outside the valid lung domain are NaN.
+
+### Descriptive regional lung analysis
+
+The historical functional-lung component describes spatial patterns without claiming validated function.
+
+Defaults:
+
+```text
+Display percentile: 99
+Overlay opacity: 0.45
+Histogram bins: 100
+```
+
+Example:
+
+```bash
+python src/analyze_functional_lung.py \
+  --fixed outputs/registration/<case_id>/full/preprocessed/fixed.nii.gz \
+  --registered outputs/registration/<case_id>/full/deformable/moving_registered.nii.gz \
+  --lung-mask outputs/totalsegmentator/<fixed_case_id>/lungs/combined_lungs.nii.gz \
+  --left-lung outputs/totalsegmentator/<fixed_case_id>/lungs/lung_left.nii.gz \
+  --right-lung outputs/totalsegmentator/<fixed_case_id>/lungs/lung_right.nii.gz \
+  --output-dir outputs/registration/<case_id>/full/functional_lung \
+  --dry-run \
+  --json
+```
+
+Outputs include:
+
+- Axial, coronal, and sagittal overlays
+- Multislice figures
+- Slice trends
+- Histograms
+- Regional statistics
+- `functional_lung_report.json`
+
+Limitations:
+
+- Connected positive and negative regions have no automatic physiological interpretation.
+- Left/right masks should be supplied for semantic anatomical summaries.
+- Geometric physical-x partitions are not semantic lung segmentations.
+
+### Historical normalized intensity maps
+
+Two denominator policies are supported.
+
+Absolute-threshold formula:
+
+```text
+(fixed - registered) / fixed
+```
+
+where:
+
+```text
+abs(fixed) >= threshold
+```
+
+Epsilon formula:
+
+```text
+(fixed - registered) / (fixed + epsilon)
+```
+
+Machine epsilon is:
+
+```text
+2.220446049250313e-16
+```
+
+Defaults:
+
+```text
+Denominator policy: must be explicitly selected
+Display percentile: 99
+Overlay opacity: 0.45
+```
+
+Machine epsilon prevents exact numerical division by zero but does not stabilize genuinely small MRI denominators. These historical maps use a different equation from the dedicated fractional MRI signal-change proxy.
+
+---
+
+## Fractional MRI signal-change proxy
+
+### Purpose
+
+The dedicated analysis calculates:
+
+```text
+P(x) = (M_R(x) - F(x)) / M_R(x)
+```
+
+where:
+
+- `F` is the fixed MRI.
+- `M_R` is the registered moving MRI.
+- `P` is the exploratory fractional MRI signal-change proxy.
+
+The original moving MRI is not used in the voxelwise formula because it is not in fixed-image anatomical correspondence.
+
+### Interpretation
+
+- `P > 0`: registered-moving signal is greater than fixed signal.
+- `P < 0`: registered-moving signal is lower than fixed signal.
+- `P = 0`: the two signals are equal.
+
+The sign describes registered MRI signal change. It does not automatically describe physiological ventilation.
+
+### Default denominator policy
+
+A voxel is valid when:
+
+```text
+abs(M_R(x)) >=
+0.01 × median(abs(M_R)) within the fixed-space lung mask
+```
+
+Default settings:
+
+```text
+Denominator-threshold fraction: 0.01
+Display percentile: 99
+Overlay opacity: 0.62
+Invalid analytical voxels: NaN
+Outside-lung analytical voxels: NaN
+```
+
+Machine epsilon is not used to hide unstable denominators.
+
+### Adjustable parameters
+
+- `--denominator-threshold`
+- `--denominator-threshold-fraction`
+- `--display-percentile`
+- `--overlay-opacity`
+- `--gaussian-sigma-mm`
+- `--gaussian-truncate`
+- `--gaussian-support-radius-mm`
+- Case directories
+- Lung-mask paths
+- Prior proxy directory
+- Output directory
+- Overwrite behavior
+
+Use an absolute denominator threshold only when supported by an MRI noise or calibration analysis:
+
+```bash
+python src/generate_fractional_signal_change_proxy.py \
+  --denominator-threshold <CONFIRMED_POSITIVE_VALUE> \
+  --output-dir outputs/registration/case_comparison/fractional_proxy_absolute_threshold
+```
+
+### Inputs
+
+For each case:
+
+- Fixed MRI
+- Registered moving MRI
+- Exact fixed-space combined-lung mask
+
+Exact size, spacing, origin, and direction agreement are required.
+
+### Outputs
+
+```text
+outputs/registration/case_comparison/
+  fractional_mri_signal_change_proxy_gaussian_mm_comparison/
+    case_1/
+      native_fractional_proxy.nii.gz
+      native_validity.nii.gz
+      mean_filtered_fractional_proxy.nii.gz
+      mean_filtered_validity.nii.gz
+      gaussian_filtered_fractional_proxy.nii.gz
+      gaussian_filtered_validity.nii.gz
+    case_2/
+      native_fractional_proxy.nii.gz
+      native_validity.nii.gz
+      mean_filtered_fractional_proxy.nii.gz
+      mean_filtered_validity.nii.gz
+      gaussian_filtered_fractional_proxy.nii.gz
+      gaussian_filtered_validity.nii.gz
+    fractional_proxy_axial_comparison.png
+    fractional_proxy_multiplanar_comparison.png
+    fractional_proxy_report.json
+```
+
+---
+
+## Native, mean, and Gaussian comparison
+
+### Native method
+
+The formula is calculated directly at every valid lung voxel.
+
+Advantages:
+
+- Retains the greatest local variation.
+- Does not impose spatial averaging.
+
+Limitations:
+
+- Most sensitive to voxel-scale noise.
+- Produces the greatest number of extreme values.
+
+### 7×7×7 box mean
+
+The fixed and registered-moving images are filtered separately before calculating the ratio.
+
+Every valid contributing voxel in the neighborhood receives equal weight.
+
+```text
+Maximum neighborhood: 7×7×7 voxels
+Maximum voxel count: 343
+```
+
+Near the lung boundary or an invalid denominator, fewer than 343 voxels may contribute. The filter divides by the number of valid contributors, preventing outside-lung background from lowering the average.
+
+Advantages:
+
+- Strongly reduces voxel-scale variation.
+- Simple and reproducible.
+
+Limitations:
+
+- Applies equal weight to near and distant neighbors.
+- Produces the strongest spatial averaging of the three primary methods.
+- Reduces effective spatial resolution.
+
+### Gaussian-weighted filter
+
+The fixed and registered-moving images are filtered separately using:
+
+```text
+filtered_I(x) =
+Gaussian(I(x) × V(x)) / Gaussian(V(x))
+```
+
+where `V` is the analytical-validity mask.
+
+The proxy is then calculated as:
+
+```text
+P_G(x) =
+(filtered_M_R(x) - filtered_F(x)) / filtered_M_R(x)
+```
+
+Default Gaussian parameters:
+
+```text
+Sigma: 2.5 mm
+Truncation: 1.5 sigma
+```
+
+For the current reference grid, these settings produce a 7×7×7 discrete support. This support is comparable to, but mathematically different from, the box mean.
+
+Advantages:
+
+- Nearby voxels receive more weight.
+- Reduces voxel-scale variation.
+- Retains slightly more local variation than the equal-weight box mean.
+
+Limitations:
+
+- Sigma is exploratory and not physiologically validated.
+- Filtering reduces effective spatial resolution.
+- Different sigma and truncation choices can change the result.
+
+### Filtering order
+
+The primary filtered experiments use:
+
+```text
+filter fixed image
+filter registered-moving image
+calculate ratio from filtered inputs
+```
+
+They do not use:
+
+```text
+calculate native ratio
+smooth the ratio afterward
+```
+
+Post-ratio smoothing must be treated as a separate experiment if it is studied.
+
+### Visualization policy
+
+The comparison figures use:
+
+```text
+grayscale fixed MRI anatomy everywhere
++ signed proxy color only inside valid lung voxels
++ exact lung-mask contour
+```
+
+The absolute-difference image is not used as the anatomical background.
+
+A signed, zero-centered `RdBu_r` colormap is used. `turbo` is not used because it does not naturally distinguish signed positive and negative values around zero.
+
+All Case 1 and Case 2 native, mean, and Gaussian maps use one pooled symmetric display interval.
+
+### Current reference-run values
+
+The following are results from the current two-case dataset. They are not universal defaults and must be recalculated for new data.
+
+```text
+Voxel spacing:
+approximately 1.29770994 mm isotropic
+
+Mean support:
+7×7×7 voxels
+up to 343 valid contributors
+
+Gaussian sigma:
+2.5 mm
+
+Gaussian truncation:
+1.5 sigma
+
+Gaussian voxel sigma:
+approximately 1.92647 voxels per axis
+
+Gaussian discrete support:
+7×7×7 voxels
+
+Voxel-cell physical support:
+approximately 9.08397 mm per axis
+
+First-to-last center span:
+approximately 7.78626 mm per axis
+```
+
+Current denominator thresholds:
+
+```text
+Case 1: 9.073836059570313
+Case 2: 10.60737060546875
+```
+
+Current six-map shared 99th-percentile display interval:
+
+```text
+[-0.6633644104003906, +0.6633644104003906]
+```
+
+Current valid lung count per case and method:
+
+```text
+522,794 voxels
+```
+
+These values should be read from `fractional_proxy_report.json` rather than hardcoded into new analyses.
+
+---
+
+## Horos DICOM export
+
+### Purpose
+
+The completed comparison can be exported into six independent, scrollable Horos-compatible RGB DICOM Secondary Capture series:
+
+- Case 1 native
+- Case 1 mean
+- Case 1 Gaussian
+- Case 2 native
+- Case 2 mean
+- Case 2 Gaussian
+
+### Rendering design
+
+Every slice uses:
+
+```text
+fixed MRI grayscale anatomy everywhere
++ proxy color inside valid exact-mask lung voxels
+```
+
+No signed- or absolute-difference image is loaded or used as the background.
+
+### Defaults
+
+```text
+Overlay opacity: 0.62
+Lung-mask contour: enabled
+Colormap: RdBu_r
+Display limits: read from fractional_proxy_report.json
+Slice order: ascending fixed-image axial order
+```
+
+### Generate
+
+```bash
+python src/export_fractional_proxy_dicom.py \
+  --dry-run \
+  --json
+
+python src/export_fractional_proxy_dicom.py
+```
+
+### Adjustable parameters
+
+- `--comparison-report`
+- `--output-dir`
+- `--opacity`
+- `--no-contour`
+- `--overwrite`
+
+### Outputs
+
+```text
+outputs/registration/case_comparison/
+  fractional_mri_signal_change_proxy_gaussian_mm_comparison/
+    horos_rgb_dicom_secondary_capture/
+      case_1/
+        native/
+        mean/
+        gaussian/
+      case_2/
+        native/
+        mean/
+        gaussian/
+      fractional_proxy_rgb_secondary_capture_manifest.json
+```
+
+The current export contains 360 axial slices per series.
+
+### Open Case 1 in Horos
+
+```bash
+open -a "Horos" \
+  outputs/registration/case_comparison/fractional_mri_signal_change_proxy_gaussian_mm_comparison/horos_rgb_dicom_secondary_capture/case_1/native \
+  outputs/registration/case_comparison/fractional_mri_signal_change_proxy_gaussian_mm_comparison/horos_rgb_dicom_secondary_capture/case_1/mean \
+  outputs/registration/case_comparison/fractional_mri_signal_change_proxy_gaussian_mm_comparison/horos_rgb_dicom_secondary_capture/case_1/gaussian
+```
+
+### Open Case 2 in Horos
+
+```bash
+open -a "Horos" \
+  outputs/registration/case_comparison/fractional_mri_signal_change_proxy_gaussian_mm_comparison/horos_rgb_dicom_secondary_capture/case_2/native \
+  outputs/registration/case_comparison/fractional_mri_signal_change_proxy_gaussian_mm_comparison/horos_rgb_dicom_secondary_capture/case_2/mean \
+  outputs/registration/case_comparison/fractional_mri_signal_change_proxy_gaussian_mm_comparison/horos_rgb_dicom_secondary_capture/case_2/gaussian
+```
+
+### DICOM limitations
+
+These files are:
+
+- Anonymized RGB Secondary Capture objects
+- Irreversibly windowed visualization products
+- Derived from NIfTI data
+- Not original clinical DICOM objects
+- Not quantitative DICOM Parametric Maps
+- Not DICOM SEG objects
+- Not RTSTRUCT objects
+- Not clinical overlays
+
+Quantitative proxy values cannot be recovered accurately from their RGB pixels. Use the analytical NIfTIs and JSON report for quantitative analysis.
+
+---
+
+## Presentation workflow
+
+The presentation launcher opens completed artifacts without recomputing them.
+
+List available stages:
+
+```bash
+./presentation_commands.sh help
+```
+
+Examples:
+
+```bash
+./presentation_commands.sh original
+./presentation_commands.sh segmentation
+./presentation_commands.sh bbox
+./presentation_commands.sh full-registration
+./presentation_commands.sh full-registration-qc
+./presentation_commands.sh metric-analysis
+./presentation_commands.sh functional-lung
+./presentation_commands.sh normalized-map
+./presentation_commands.sh case-comparison
+./presentation_commands.sh professor-update
+```
+
+Rehearse without opening applications:
+
+```bash
+PRESENTATION_DRY_RUN=1 \
+  ./presentation_commands.sh professor-update
+```
+
+Open all fractional-proxy PNG figures together:
+
+```bash
+open -a "Preview" \
+  outputs/registration/case_comparison/fractional_mri_signal_change_proxy_gaussian_mm_comparison/*.png
+```
+
+Detailed presentation commands and speaking notes are available in:
+
+```text
+docs/registration_presentation_commands.md
+```
+
+---
+
+## Inputs and outputs
+
+### Private inputs
+
+```text
+data/raw/
+```
+
+### Main output structure
+
+```text
+outputs/
+    nifti/                       working NIfTIs
+    totalsegmentator/            semantic and combined lung masks
+    figures/                     segmentation and bbox QC
+    bbox/                        bounding-box JSON files
+    crops/                       cropped images and masks
+    itksnap/                     ITK-SNAP viewer products
+    osirix/                      optional compatibility exports
+    registration/
+        <case_id>/
+            full/
+            cropped/
+        case_comparison/
+```
+
+### Source structure
+
+```text
+config/                          default configuration
+docs/                            architecture and presentation documentation
+legacy/                          unsupported historical scripts
+scripts/                         setup utilities
+src/                             active implementation
+tests/                           automated tests
+third_party/deedsBCV/            pinned source provenance and patches
+```
+
+### Coordinate conventions
+
+- SimpleITK indices and sizes use `x,y,z`.
+- SimpleITK arrays exposed to NumPy use `z,y,x`.
+- Physical coordinates are expressed in millimeters.
+- Direction matrices are preserved.
+- Bounding boxes use half-open NumPy intervals.
+
+---
+
+## Testing
+
+Run the fractional-proxy tests:
+
+```bash
+pytest -q tests/test_fractional_signal_change_proxy.py
+```
+
+Run the Horos export tests:
+
+```bash
+pytest -q tests/test_fractional_proxy_rgb_secondary_capture.py
+```
+
+Run the complete test suite:
+
+```bash
+pytest -q
+```
+
+Compile Python sources:
+
+```bash
+python -m compileall -q src tests
+```
+
+Check patch formatting:
+
+```bash
+git diff --check
+```
+
+Before accepting analytical outputs, verify:
+
+- Fixed and moving role assignments
+- Source checksums
+- Exact geometry
+- Lung-mask confinement
+- Invalid denominator handling
+- NaN preservation
+- Shared-window provenance
+- Filter definition
+- Slice locations
+- DICOM readability
+- DICOM identifier uniqueness
+- Output overwrite protection
+- Visual orientation and slice ordering
+
+---
 
 ## Data privacy
 
-Medical data must remain local. `data/raw/`, `outputs/`, DICOM, NIfTI, and NumPy
-arrays are ignored by Git. Reports use project-relative paths when possible and
-exclude patient names, IDs, birth dates, accession numbers, full DICOM metadata,
-environment dumps, and subprocess output.
+Medical data must remain local.
 
-## Directory structure
+Do not commit:
 
-```text
-data/raw/                         private input data
-outputs/nifti/<case_id>/          geometry-preserving working NIfTI
-outputs/totalsegmentator/<case>/  semantic and combined lung masks
-outputs/figures/<case>/           segmentation and bbox QC
-outputs/bbox/<case>/              bbox.json
-outputs/crops/<case>/             image and mask crops
-outputs/itksnap/<case>/           primary viewer products
-outputs/osirix/<case>/            optional RTSTRUCT/fallback package
-outputs/logs/<case>/              non-identifying pipeline log
-legacy/                           unsupported historical lungmask scripts
-```
+- Raw DICOM data
+- NIfTI images
+- NumPy arrays
+- Segmentations
+- Registration outputs
+- Derived DICOM series
+- Patient metadata
+- Compiled third-party binaries
 
-## Input formats
+Reports should use non-identifying case IDs and should not include:
 
-The loader supports CT/MR DICOM directories and `.nii`/`.nii.gz` images. NIfTI
-modality must be specified because its header does not reliably encode CT versus
-MR. A DICOM-aligned NIfTI is sufficient for ITK-SNAP; the original DICOM is only
-needed for optional RTSTRUCT work.
+- Patient names
+- Medical record numbers
+- Dates of birth
+- Accession numbers
+- Unnecessary DICOM metadata
+- Environment-variable dumps
 
-Geometry conventions:
+---
 
-- SimpleITK indices and size: `x,y,z`
-- NumPy arrays: `z,y,x`
-- Physical coordinates: millimeters in the image coordinate frame
-- Bounding boxes: half-open `[min:max)` in NumPy `z,y,x`
+## Recorded limitations
 
-## Pipeline stages
+1. This software is research-only and non-diagnostic.
+2. MRI intensities are not physically calibrated like CT Hounsfield units.
+3. Fixed and moving roles require researcher confirmation.
+4. Respiratory phase and scan ordering may be uncertain.
+5. Registration metrics do not prove anatomical correctness.
+6. Trilinear interpolation changes registered-moving intensities.
+7. Registration error can appear as regional signal change.
+8. Lung-mask errors propagate into every masked analysis.
+9. The fractional-proxy denominator policy is exploratory.
+10. Machine epsilon does not scientifically stabilize small MRI denominators.
+11. Box and Gaussian filtering reduce effective spatial resolution.
+12. Gaussian sigma and truncation are not physiologically validated.
+13. The fractional MRI signal-change proxy has not been validated against physiological ground truth.
+14. The current reference analysis contains too few cases for population-level inference.
+15. Full and cropped registration metrics cover different domains.
+16. RGB Secondary Capture DICOMs are visualization-only.
+17. Quantitative values cannot be recovered from rendered RGB exports.
+18. CT five-lobe ITK-SNAP integration is incomplete.
+19. macOS is the best-tested viewer and registration-development environment.
+20. Source DICOM without complete reference metadata cannot safely support RTSTRUCT export.
 
-Default MR `run-all` order:
+---
 
-1. `inspect`
-2. `segment`
-3. `segmentation-qc`
-4. `bbox`
-5. `bbox-qc`
-6. `prepare-itksnap`
-7. optional `launch`
+## Future directions
 
-Viewer products are generated even with `--no-launch`. OsiriX export is not a
-default stage; `--export-rtstruct` is an explicit opt-in.
+### Scientific validation
 
-## MRI workflow
+- Confirm fixed and moving acquisition roles.
+- Confirm respiratory state and acquisition ordering.
+- Record MRI sequence and reconstruction parameters.
+- Validate the proxy against an independent physiological reference.
+- Compare against spirometry, hyperpolarized-gas MRI, CT ventilation, or another appropriate reference.
+- Evaluate scan-rescan repeatability.
+- Expand the analysis to a larger cohort.
 
-MRI is fully supported through ITK-SNAP viewer preparation. TotalSegmentator's
-`total_mr` task supplies semantic `lung_left` and `lung_right` masks. Viewer
-labels are `1 Lung Left`, `2 Lung Right`, and `10 Lung Bounding Box`.
+### Registration validation
 
-The supplied Secondary Capture MRI lacks `FrameOfReferenceUID`, so RTSTRUCT is
-not appropriate. This does not affect the geometry-matched NIfTI/ITK-SNAP path.
+- Add expert anatomical landmarks.
+- Evaluate deformation-field Jacobians separately from intensity-derived proxies.
+- Add inverse-consistency checks.
+- Add deformation-topology checks.
+- Compare alternative registration methods.
+- Quantify the effects of cropping and interpolation.
 
-## CT workflow and limitation
+### Signal-processing validation
 
-CT image loading, TotalSegmentator segmentation, QC, bbox calculation, and crop
-commands remain supported. TotalSegmentator produces the five known lobe masks.
-Version 1.1 does not yet configure those masks as an ITK-SNAP label table, so
-unified CT `run-all` fails explicitly before claiming a complete viewer package.
-Use individual CT stages until the five-lobe viewer mapping is validated.
+- Perform denominator-threshold sensitivity analysis.
+- Compare multiple Gaussian sigma values.
+- Quantify effective spatial resolution.
+- Evaluate post-ratio filtering only as a separately named experiment.
+- Investigate edge-preserving filters.
+- Add uncertainty and confidence maps.
+- Quantify partial-volume effects near lung boundaries.
 
-## TotalSegmentator tasks
+### MRI intensity standardization
 
-- CT: `total`
-- MR: `total_mr`
+- Measure background noise.
+- Develop acquisition-informed denominator thresholds.
+- Evaluate bias-field correction.
+- Investigate scanner- and sequence-specific normalization.
+- Determine whether intensities are comparable across sessions.
 
-The active pipeline accepts `auto`, `cpu`, `mps`, or `cuda` device selection and
-records non-identifying software/task provenance.
+### Visualization and interoperability
 
-## Segmentation QC
+- Consider quantitative DICOM Parametric Map export.
+- Preserve analytical values separately from RGB products.
+- Improve cross-platform viewer support.
+- Complete CT five-lobe label support.
+- Automate provenance-rich presentation reports.
 
-Segmentation QC validates binary masks and exact image geometry, then creates
-filled and contour overlays plus `segmentation_qc.json`. It is independent of
-bbox QC.
+### Reproducibility
 
-## Bounding box and crop
+- Add containerized environments.
+- Add dataset-level manifests.
+- Record software and model versions in every report.
+- Add continuous integration for synthetic tests.
+- Add standardized experiment configuration files.
+- Add formal release tags for analytical definitions.
 
-The bbox is calculated from every nonzero combined-lung voxel, supports physical
-or voxel padding, and is stored as `[z_min:z_max, y_min:y_max, x_min:x_max)`.
-SimpleITK region-of-interest cropping preserves spacing/direction and updates the
-crop origin. Bbox QC independently verifies containment and crop consistency.
-
-## ITK-SNAP viewer products
-
-```text
-outputs/itksnap/<case_id>/
-    lungs_multilabel.nii.gz
-    bbox_label.nii.gz
-    lungs_and_bbox_labels.nii.gz
-    label_descriptions.txt
-    launch_manifest.json
-```
-
-- `lungs_multilabel.nii.gz` is the authoritative semantic segmentation.
-- `bbox_label.nii.gz` is the authoritative one-voxel, six-face bbox shell.
-- `lungs_and_bbox_labels.nii.gz` is a visualization convenience product.
-- Label `10` wins on bbox/lung overlap only in the combined viewer image.
-- Do not use the combined image for quantitative lung-volume measurements.
-- Every label image preserves reference size, spacing, origin, and direction.
-
-The shell marks each minimum face and each exclusive maximum minus one, making
-the half-open bbox visible throughout axial, coronal, and sagittal traversal.
-
-## Unified run-all examples
-
-Dry-run without application launch:
-
-```bash
-python src/pipeline.py run-all \
-  --image outputs/nifti/mri_first_case/image_from_dicom.nii.gz \
-  --input-type nifti --modality mr --case-id mri_first_case \
-  --device mps --padding-mm 5 --viewer itksnap --no-launch --dry-run
-```
-
-Resume and prepare without launch:
-
-```bash
-python src/pipeline.py run-all \
-  --image outputs/nifti/mri_first_case/image_from_dicom.nii.gz \
-  --input-type nifti --modality mr --case-id mri_first_case \
-  --resume --viewer itksnap --no-launch
-```
-
-Resume and launch:
-
-```bash
-python src/pipeline.py run-all \
-  --image outputs/nifti/mri_first_case/image_from_dicom.nii.gz \
-  --input-type nifti --modality mr --case-id mri_first_case \
-  --resume --launch --viewer itksnap
-```
-
-`--dry-run` validates known source inputs, plans every downstream output and
-launch role, but writes nothing, runs no inference, and launches no application.
-
-## Individual-stage examples
-
-```bash
-python src/pipeline.py segmentation-qc \
-  --image outputs/nifti/mri_first_case/image_from_dicom.nii.gz \
-  --mask outputs/totalsegmentator/mri_first_case/lungs/combined_lungs.nii.gz \
-  --individual-mask lung_left=outputs/totalsegmentator/mri_first_case/lungs/lung_left.nii.gz \
-  --individual-mask lung_right=outputs/totalsegmentator/mri_first_case/lungs/lung_right.nii.gz \
-  --modality mr --case-id mri_first_case
-```
-
-```bash
-python src/pipeline.py bbox-qc \
-  --image outputs/nifti/mri_first_case/image_from_dicom.nii.gz \
-  --mask outputs/totalsegmentator/mri_first_case/lungs/combined_lungs.nii.gz \
-  --bbox-json outputs/bbox/mri_first_case/bbox.json \
-  --crop-image outputs/crops/mri_first_case/image_crop.nii.gz \
-  --crop-mask outputs/crops/mri_first_case/combined_lungs_crop.nii.gz \
-  --modality mr --case-id mri_first_case
-```
-
-Manual ITK-SNAP preparation and launch are available through `prepare-itksnap`
-and `launch`; use each command's `--help` for its complete argument contract.
-
-## Optional RTSTRUCT/OsiriX path
-
-This tested compatibility path is only for source DICOM series with complete,
-consistent spatial references, unique SOP Instance UIDs, and one-to-one slice
-mapping. Inspect capability before export:
-
-```bash
-python src/pipeline.py inspect --dicom-dir data/raw/<case>/dicom
-```
-
-The explicit `export` command or `run-all --export-rtstruct --dicom-dir ...`
-performs validation. Missing `FrameOfReferenceUID` prevents safe RTSTRUCT but is
-irrelevant to ITK-SNAP. OsiriX/Horos launch remains available explicitly and is
-never selected as a silent fallback.
-
-## Outputs
-
-Generated NIfTI, JSON, figures, logs, RTSTRUCT objects, and review packages are
-private research artifacts under ignored `outputs/`. Existing outputs are not
-replaced without `--overwrite`, except that `--resume` may regenerate only an
-invalid/partial selected-case ITK-SNAP package.
-
-## Troubleshooting
-
-- Run `launch --viewer itksnap --health-check` for installation diagnostics.
-- Use the DICOM-aligned NIfTI if image/mask geometry differs.
-- Use `--resume` only with products from the same source image and geometry.
-- A refused RTSTRUCT indicates unsafe DICOM references; use ITK-SNAP instead.
-- CT `run-all` intentionally reports the unconfigured viewer-label limitation.
-
-## Known limitations
-
-- ITK-SNAP detection currently targets macOS application bundles.
-- CT five-lobe ITK-SNAP viewer preparation is not configured in v1.1.
-- Secondary Capture DICOM without `FrameOfReferenceUID` cannot safely support
-  RTSTRUCT export.
-- Outputs require research validation and are not diagnostic annotations.
+---
 
 ## Research-use-only disclaimer
 
-This software is for research validation only. It is not a medical device and
-must not be used for diagnosis or clinical decision-making.
+This software and every generated output are intended exclusively for research validation.
+
+They must not be used for:
+
+- Diagnosis
+- Treatment planning
+- Clinical decision-making
+- Patient monitoring
+- Claims of validated regional ventilation
+- Claims of validated perfusion
+- Claims of clinical biomarker performance
+
+Scientific interpretation requires independent validation, confirmed acquisition roles, appropriate statistical analysis, and expert review.
