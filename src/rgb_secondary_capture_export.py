@@ -454,7 +454,7 @@ def render_rgb_slice(fixed, registered, *, vmin, vmax, anatomy_limits, opacity) 
 def _write_dicom_slice(
     *, path, rgb, case, instance_number, sop_instance_uid, study_instance_uid,
     series_instance_uid, frame_of_reference_uid, geometry, position,
-    series_description, derivation, timestamp,
+    series_description, derivation, timestamp, series_number=None,
 ):
     file_meta = FileMetaDataset()
     file_meta.MediaStorageSOPClassUID = SecondaryCaptureImageStorage
@@ -496,7 +496,11 @@ def _write_dicom_slice(
     dataset.InstanceCreationTime = dataset.StudyTime
     dataset.DateOfSecondaryCapture = dataset.StudyDate
     dataset.TimeOfSecondaryCapture = dataset.StudyTime
-    dataset.SeriesNumber = 1 if case == "case_1" else 2
+    dataset.SeriesNumber = (
+        int(series_number)
+        if series_number is not None
+        else (1 if case == "case_1" else 2)
+    )
     dataset.InstanceNumber = instance_number
     dataset.PatientOrientation = ""
     dataset.PixelSpacing = [_ds(value) for value in geometry["pixel_spacing_row_column_mm"]]

@@ -14,6 +14,86 @@ All paths passed to ITK-SNAP are resolved from the repository location and are
 therefore absolute. The script reads completed products only; it never runs
 segmentation, registration, QC, or analysis code.
 
+## Exploratory fractional MRI signal-change proxy
+
+This product is intentionally separate from the presentation launcher's
+absolute-difference and machine-epsilon normalized products. Generate it from
+the repository root only after reviewing the dry-run report:
+
+```bash
+python src/generate_fractional_signal_change_proxy.py --dry-run --json
+python src/generate_fractional_signal_change_proxy.py
+```
+
+The analytical definition is
+`(registered_moving - fixed) / registered_moving` on valid voxels inside the
+exact fixed-space lung mask. The default validity threshold is one percent of
+the per-case median absolute registered-moving lung signal. The filtered
+variants apply either a normalized mask-aware `7 x 7 x 7` mean or a finite
+normalized `7 x 7 x 7` Gaussian separately to fixed and registered-moving
+images before calculating the ratio; neither is a post-ratio smoothing result.
+The Gaussian defaults to `sigma = 2.5 mm` with a `1.5 sigma` truncation.
+Physical spacing is converted to axis-specific voxel sigma and support. On the
+current isotropic grid the discrete support is `7 x 7 x 7`, comparable to but
+not mathematically identical to the mean filter.
+
+Open the comparison figures:
+
+```bash
+open outputs/registration/case_comparison/fractional_mri_signal_change_proxy_gaussian_mm_comparison/fractional_proxy_axial_comparison.png
+open outputs/registration/case_comparison/fractional_mri_signal_change_proxy_gaussian_mm_comparison/fractional_proxy_multiplanar_comparison.png
+```
+
+Open Case 1 native, mean-filtered, and Gaussian-filtered analytical maps over
+fixed anatomy in ITK-SNAP:
+
+```bash
+open -a "ITK-SNAP" --args \
+  -g outputs/registration/registration_case_1/full/preprocessed/fixed.nii.gz \
+  -o outputs/registration/case_comparison/fractional_mri_signal_change_proxy/case_1/native_fractional_proxy.nii.gz \
+     outputs/registration/case_comparison/fractional_mri_signal_change_proxy/case_1/mean_filtered_fractional_proxy.nii.gz \
+     outputs/registration/case_comparison/fractional_mri_signal_change_proxy_gaussian_mm_comparison/case_1/gaussian_filtered_fractional_proxy.nii.gz \
+  -s outputs/totalsegmentator/registration_case_1_fixed/lungs/combined_lungs.nii.gz
+```
+
+Replace `case_1`/`registration_case_1` with `case_2`/`registration_case_2` for
+the second moving acquisition. NaNs outside the valid lung domain and the
+binary validity maps are analytical provenance, not zero-valued signal change.
+The maps are exploratory MRI signal-change proxies—not validated fractional
+ventilation, perfusion, CT density change, or clinical biomarkers.
+
+## Fractional-proxy Horos RGB DICOM series
+
+Generate only after the six-map proxy report is complete:
+
+```bash
+python src/export_fractional_proxy_dicom.py --dry-run --json
+python src/export_fractional_proxy_dicom.py
+```
+
+The output contains separate `native`, `mean`, and `gaussian` Secondary Capture
+series beneath each case directory. All six use fixed MRI grayscale anatomy,
+the report's shared signed limits `[-0.6633644104003906,
++0.6633644104003906]`, `RdBu_r`, opacity `0.62`, identical ascending axial
+order, and color confined to valid exact-mask lung voxels. No absolute- or
+signed-difference image is used as a background.
+
+Import the six folders into Horos:
+
+```bash
+open -a Horos outputs/registration/case_comparison/fractional_mri_signal_change_proxy_gaussian_mm_comparison/horos_rgb_dicom_secondary_capture/case_1/native
+open -a Horos outputs/registration/case_comparison/fractional_mri_signal_change_proxy_gaussian_mm_comparison/horos_rgb_dicom_secondary_capture/case_1/mean
+open -a Horos outputs/registration/case_comparison/fractional_mri_signal_change_proxy_gaussian_mm_comparison/horos_rgb_dicom_secondary_capture/case_1/gaussian
+open -a Horos outputs/registration/case_comparison/fractional_mri_signal_change_proxy_gaussian_mm_comparison/horos_rgb_dicom_secondary_capture/case_2/native
+open -a Horos outputs/registration/case_comparison/fractional_mri_signal_change_proxy_gaussian_mm_comparison/horos_rgb_dicom_secondary_capture/case_2/mean
+open -a Horos outputs/registration/case_comparison/fractional_mri_signal_change_proxy_gaussian_mm_comparison/horos_rgb_dicom_secondary_capture/case_2/gaussian
+```
+
+These are anonymized, visualization-only, NIfTI-derived RGB Secondary Capture
+objects. They are not original clinical DICOM objects, quantitative DICOM
+Parametric Maps, or validated ventilation products, and they claim no original
+clinical DICOM reference relationship.
+
 ## Professor Update — New MRI Results
 
 Command:

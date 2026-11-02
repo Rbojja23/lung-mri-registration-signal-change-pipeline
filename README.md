@@ -532,6 +532,113 @@ the deedsBCV build and default-by-omission command strategy, fixed-derived crop
 method and padding, MI bins, metric definitions, display percentiles,
 fixed-space lung masking, and normalized formula and epsilon provenance.
 
+## Exploratory fractional MRI signal-change proxy
+
+The dedicated cross-case checkpoint creates a research-only **registered-space
+fractional MRI signal-change proxy**. It is not validated fractional
+ventilation, perfusion, CT density change, or a clinical biomarker. It uses the
+registered moving MRI because the original moving image is not in voxelwise
+fixed-image anatomical correspondence:
+
+```text
+P = (registered_moving - fixed) / registered_moving
+```
+
+Calculation is restricted to the exact binary fixed-space combined-lung mask.
+The default denominator policy requires
+`abs(registered_moving) >= 0.01 * median(abs(registered_moving))`, where the
+median is calculated separately for each case over finite voxels in that
+case's fixed-space lung mask. Machine epsilon is not used. An explicit
+absolute signal threshold can be selected instead. Invalid and outside-lung
+analytical voxels are NaN and separate binary validity maps are saved.
+
+Three analytical variants are produced without modifying any registration or
+earlier analysis product:
+
+1. Native: the formula is applied directly on valid registered-space inputs.
+2. Mean-filtered: a normalized mask-aware `7 x 7 x 7` box mean is applied
+   separately to fixed and registered-moving inputs before the ratio. Invalid
+   native voxels do not contribute to either filtered input. No post-ratio
+   filtering is performed.
+3. Gaussian-filtered: the same pre-ratio, mask-aware normalized filtering is
+   performed with a finite physical-space Gaussian kernel. The default
+   `sigma = 2.5 mm` and `1.5 sigma` truncation give nearby voxels greater
+   influence than distant voxels. Its one-dimensional weights are proportional to
+   `exp(-d^2 / (2 sigma^2))` and are normalized before separable 3-D
+   convolution. This sigma is exploratory and is not physiologically
+   validated.
+
+At the current `1.2977099418640137 mm` isotropic spacing, the default converts
+to `1.92647 voxels` per axis and a `7 x 7 x 7` discrete kernel, covering
+`9.083969593048096 mm` per axis by voxel-cell extent (a `7.786259651184082 mm`
+first-to-last center span). This is deliberately comparable in support, but is
+not mathematically identical, to the box mean. Figures retain fixed grayscale anatomy everywhere,
+place `RdBu_r` proxy color only at valid lung voxels, draw the exact lung-mask
+contour, and use one zero-centered symmetric window pooled from both cases and
+all three analytical variants.
+
+Preview the complete calculation without writing files, then generate the new
+isolated output tree:
+
+```bash
+python src/generate_fractional_signal_change_proxy.py --dry-run --json
+python src/generate_fractional_signal_change_proxy.py
+```
+
+Change the exploratory Gaussian weighting with `--gaussian-sigma-mm` and
+`--gaussian-truncate`, or explicitly set `--gaussian-support-radius-mm`.
+Physical spacing is used independently on each axis, so anisotropic data gets
+axis-specific voxel sigmas and discrete support. A larger sigma makes weights
+more uniform within a fixed support; a smaller sigma emphasizes the center.
+
+Use a confirmed absolute denominator threshold when available from an MRI
+noise/calibration analysis:
+
+```bash
+python src/generate_fractional_signal_change_proxy.py \
+  --denominator-threshold <POSITIVE_MRI_SIGNAL_VALUE> \
+  --output-dir outputs/registration/case_comparison/fractional_mri_signal_change_proxy_absolute
+```
+
+Existing named products are protected unless `--overwrite` is supplied. The
+default outputs are under
+`outputs/registration/case_comparison/fractional_mri_signal_change_proxy_gaussian_mm_comparison/`
+and include native, mean-filtered, and Gaussian-filtered analytical NIfTIs and validity maps for both cases,
+axial and multiplanar comparison figures, and a provenance-rich JSON report.
+
+### Horos RGB Secondary Capture export
+
+The completed six-map comparison can be exported as six independent,
+Horos-compatible RGB DICOM Secondary Capture series: native, `7 x 7 x 7`
+mean, and Gaussian for each case. Every slice uses the corresponding fixed MRI
+as its grayscale background. Signed `RdBu_r` color is blended only where the
+method validity map, finite proxy values, and exact fixed-space lung mask all
+agree. No difference image is loaded or displayed.
+
+```bash
+python src/export_fractional_proxy_dicom.py --dry-run --json
+python src/export_fractional_proxy_dicom.py
+```
+
+The default opacity is `0.62`, matching the PNG comparison. The exporter reads
+the six-map limits and grayscale window from the completed JSON report, derives
+spatial tags from fixed-NIfTI geometry, and refuses existing targets unless
+`--overwrite` is explicit. These anonymized 8-bit RGB objects are
+visualization-only NIfTI derivatives—not original clinical DICOM objects or
+quantitative DICOM Parametric Maps—and no clinical reference relationship is
+claimed.
+
+Import all six series into Horos:
+
+```bash
+open -a Horos outputs/registration/case_comparison/fractional_mri_signal_change_proxy_gaussian_mm_comparison/horos_rgb_dicom_secondary_capture/case_1/native
+open -a Horos outputs/registration/case_comparison/fractional_mri_signal_change_proxy_gaussian_mm_comparison/horos_rgb_dicom_secondary_capture/case_1/mean
+open -a Horos outputs/registration/case_comparison/fractional_mri_signal_change_proxy_gaussian_mm_comparison/horos_rgb_dicom_secondary_capture/case_1/gaussian
+open -a Horos outputs/registration/case_comparison/fractional_mri_signal_change_proxy_gaussian_mm_comparison/horos_rgb_dicom_secondary_capture/case_2/native
+open -a Horos outputs/registration/case_comparison/fractional_mri_signal_change_proxy_gaussian_mm_comparison/horos_rgb_dicom_secondary_capture/case_2/mean
+open -a Horos outputs/registration/case_comparison/fractional_mri_signal_change_proxy_gaussian_mm_comparison/horos_rgb_dicom_secondary_capture/case_2/gaussian
+```
+
 Preview validation and calculations without writing outputs:
 
 ```bash
